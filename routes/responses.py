@@ -126,6 +126,7 @@ def _handle_openai_stream(
     converter = ResponsesStreamConverter(model=ctx.client_model)
 
     def generate():
+        """消费 OpenAI 聊天补全流，并实时改写为 Responses SSE。"""
         yield from converter.start_events()
 
         resp, err = forward_request(url, headers, cc_payload, stream=True)
@@ -205,6 +206,7 @@ def _handle_responses_stream(
     converter = ResponsesStreamConverter(model=ctx.client_model)
 
     def generate():
+        """透传上游原生 Responses 流，并做轻量模型名改写。"""
         resp, err = forward_request(url, headers, payload, stream=True)
         if err:
             yield responses_error_event(str(err))
@@ -275,6 +277,7 @@ def _handle_anthropic_stream(
     converter = ResponsesStreamConverter(model=ctx.client_model)
 
     def generate():
+        """消费 Anthropic SSE，并直接映射为 Responses 事件序列。"""
         yield from converter.start_events()
 
         resp, err = forward_request(url, headers, anthropic_payload, stream=True)

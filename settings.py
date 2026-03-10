@@ -27,7 +27,10 @@ _DEFAULTS = {
 
 
 def load():
-    """从文件加载配置"""
+    """从持久化文件读取配置并刷新内存缓存。
+
+    如果配置文件不存在或内容损坏，会回退到默认值，保证服务仍然可以正常启动。
+    """
     global _cache
     with _lock:
         if os.path.exists(SETTINGS_FILE):
@@ -42,7 +45,10 @@ def load():
 
 
 def save(data):
-    """保存配置到文件"""
+    """将当前配置写回到持久化文件并同步缓存。
+
+    保存前会确保数据目录存在，并始终以默认配置为基底合并缺失字段。
+    """
     global _cache
     with _lock:
         os.makedirs(DATA_DIR, exist_ok=True)
@@ -52,24 +58,24 @@ def save(data):
 
 
 def get():
-    """获取当前配置（优先使用缓存）"""
+    """获取当前配置快照，优先返回内存缓存中的结果。"""
     if _cache is None:
         return load()
     return dict(_cache)
 
 
 def get_url():
-    """获取生效的上游 URL：配置文件优先，环境变量兜底"""
+    """获取当前生效的上游 URL，优先使用持久化配置。"""
     return get().get('proxy_target_url') or Config.PROXY_TARGET_URL
 
 
 def get_key():
-    """获取生效的 API 密钥：配置文件优先，环境变量兜底"""
+    """获取当前生效的 API 密钥，优先使用持久化配置。"""
     return get().get('proxy_api_key') or Config.PROXY_API_KEY
 
 
 def resolve_model(model_name):
-    """解析模型映射，返回 {upstream_model, backend, target_url, api_key}"""
+    """解析模型映射并返回完整的上游路由信息。"""
     settings = get()
     mappings = settings.get('model_mappings', {})
     base_url, base_key = get_url(), get_key()
@@ -95,6 +101,10 @@ def resolve_model(model_name):
 
 
 def _auto_detect(name):
-    """根据模型名自动判断后端类型"""
+    """根据模型名关键字推断默认后端协议类型。
+
+    当前规则较为保守：命中 `claude` 或 `anthropic` 走 Anthropic，
+    其余模型默认视为 OpenAI 兼容后端。
+    """
     lower = (name or '').lower()
     return 'anthropic' if ('claude' in lower or 'anthropic' in lower) else 'openai'

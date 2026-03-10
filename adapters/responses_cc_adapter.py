@@ -128,7 +128,11 @@ def responses_to_cc_response(response_data: JsonDict, model: str = '') -> JsonDi
 
 @dataclass
 class _ToolBuffer:
-    """缓存单个工具调用的流式状态。"""
+    """缓存单个工具调用的流式状态。
+
+    Responses 风格的 function_call 会把名称、参数增量和完成时机拆散在多个事件里，
+    转换器需要用这个缓冲结构暂存工具标识与累计参数，便于后续按顺序补齐事件。
+    """
 
     name: str
     args: str
@@ -155,6 +159,7 @@ class ResponsesStreamConverter:
     """
 
     def __init__(self, response_id: str | None = None, model: str = ''):
+        """初始化 Responses 流式状态机所需的各类缓冲区与标识。"""
         self.resp_id = response_id or gen_id('resp_')
         self.model = model
 
@@ -366,6 +371,7 @@ class ResponsesStreamConverter:
         return events
 
     def _on_tool_call(self, tool_call: JsonDict) -> list[str]:
+        """处理来自 CC chunk 的工具调用增量，并映射成 Responses function_call 事件。"""
         events: list[str] = []
         index = tool_call.get('index', 0)
         function_data = tool_call.get('function') or {}
@@ -382,6 +388,7 @@ class ResponsesStreamConverter:
         return events
 
     def _ensure_text_started(self) -> list[str]:
+        """确保 assistant 文本输出项已开启，并在必要时先关闭 reasoning 项。"""
         events: list[str] = []
         if self._rs_started and not self._rs_closed:
             events.extend(self._close_reasoning())
@@ -401,6 +408,7 @@ class ResponsesStreamConverter:
         return events
 
     def _start_tool_from_block(self, block: JsonDict) -> list[str]:
+        """根据 Anthropic `tool_use` block 创建对应的 function_call 输出项。"""
         return self._start_tool(
             index=len(self._tools),
             call_id=block.get('id', gen_id('toolu_')),
@@ -408,6 +416,7 @@ class ResponsesStreamConverter:
         )
 
     def _start_tool(self, *, index: int, call_id: str, name: str) -> list[str]:
+        """开启一个新的 Responses function_call 输出项，并关闭前置输出段。"""
         events: list[str] = []
         if self._rs_started and not self._rs_closed:
             events.extend(self._close_reasoning())
@@ -432,6 +441,7 @@ class ResponsesStreamConverter:
         return events
 
     def _append_tool_arguments(self, index: int, arguments_delta: str) -> list[str]:
+        """向指定 function_call 缓冲区追加参数增量，并发出对应 SSE 事件。"""
         buffer = self._tools[index]
         buffer.args += arguments_delta
         return [self._sse('response.function_call_arguments.delta', {
@@ -440,6 +450,7 @@ class ResponsesStreamConverter:
         })]
 
     def _close_reasoning(self) -> list[str]:
+        """关闭 reasoning 输出项，并补发 summary 完成事件。"""
         if self._rs_closed:
             return []
         self._rs_closed = True
@@ -459,6 +470,7 @@ class ResponsesStreamConverter:
         ]
 
     def _close_text(self) -> list[str]:
+        """关闭 assistant 文本输出项，并补发文本完成事件。"""
         if self._text_closed:
             return []
         self._text_closed = True
@@ -525,6 +537,7 @@ class ResponsesStreamConverter:
         return events
 
     def _sse(self, event_type: str, data: JsonDict) -> str:
+        """将事件类型与负载编码为标准 Responses SSE 字符串。"""
         return f'event: {event_type}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n'
 
     def _rewrite_top_level_model(self, payload: JsonDict) -> JsonDict:
@@ -554,6 +567,7 @@ class ResponsesToCCStreamConverter:
     """
 
     def __init__(self, request_id: str | None = None, model: str = ''):
+        """初始化 Responses → Chat Completions 流式转换所需的状态。"""
         self._id = request_id or gen_id('chatcmpl-')
         self._model = model
         self._tool_index = 0
@@ -652,6 +666,7 @@ class ResponsesToCCStreamConverter:
 
 
 def _copy_request_options(payload: JsonDict, result: JsonDict) -> None:
+    """将 Responses 请求中的通用选项复制到 CC 请求体。"""
     if 'tools' in payload:
         result['tools'] = _convert_tools(payload['tools'])
     for key in ('temperature', 'top_p'):
@@ -664,6 +679,7 @@ def _copy_request_options(payload: JsonDict, result: JsonDict) -> None:
 
 
 def _copy_responses_request_options(payload: JsonDict, result: JsonDict) -> None:
+    """将聊天补全请求中的通用选项复制到原生 Responses 请求体。"""
     if 'tools' in payload:
         result['tools'] = _convert_cc_tools_to_responses(payload['tools'])
     for key in ('temperature', 'top_p', 'tool_choice'):
@@ -678,6 +694,7 @@ def _append_responses_input_item(
     instructions: list[str],
     input_items: list[JsonDict],
 ) -> None:
+    """将单条 Chat Completions 消息追加为 Responses `input` 项。"""
     if not isinstance(message, dict):
         return
 
@@ -711,6 +728,7 @@ def _append_responses_input_item(
 
 
 def _convert_input_items(items: list[Any], messages: list[JsonDict]) -> None:
+    """将 Responses `input` 数组重建为 Chat Completions `messages` 列表。"""
     index = 0
     while index < len(items):
         item = items[index]
@@ -756,6 +774,7 @@ def _convert_input_items(items: list[Any], messages: list[JsonDict]) -> None:
 
 
 def _append_message_item(items: list[Any], *, start: int, messages: list[JsonDict]) -> int:
+    """将一个 message 项及其后续连续 function_call 项合并成一条消息。"""
     item = items[start]
     role = item.get('role', 'assistant')
     content = _extract_text(item.get('content', []))
@@ -775,6 +794,7 @@ def _append_message_item(items: list[Any], *, start: int, messages: list[JsonDic
 
 
 def _append_function_call_item(item: JsonDict, messages: list[JsonDict]) -> None:
+    """将独立的 Responses `function_call` 项挂接到最近的 assistant 消息上。"""
     tool_call = _build_cc_tool_call(item)
 
     if messages and messages[-1]['role'] == 'assistant':
@@ -787,6 +807,7 @@ def _append_function_call_item(item: JsonDict, messages: list[JsonDict]) -> None
 
 
 def _convert_function_call_output_item(item: JsonDict) -> JsonDict:
+    """将 Responses 的 `function_call_output` 项转换为 OpenAI `tool` 消息。"""
     output = item.get('output', '')
     if not isinstance(output, str):
         output = json.dumps(output, ensure_ascii=False)
@@ -798,12 +819,14 @@ def _convert_function_call_output_item(item: JsonDict) -> JsonDict:
 
 
 def _normalize_simple_content(content: Any) -> str:
+    """将简单 content 载荷规范化为纯文本字符串。"""
     if isinstance(content, list):
         return _extract_text(content) or ''
     return str(content) if content is not None else ''
 
 
 def _collect_function_calls(items: list[Any], start: int) -> tuple[list[JsonDict], int]:
+    """收集从指定位置开始连续出现的 `function_call` 项。"""
     tool_calls: list[JsonDict] = []
     index = start
     while index < len(items):
@@ -817,6 +840,7 @@ def _collect_function_calls(items: list[Any], start: int) -> tuple[list[JsonDict
 
 
 def _build_cc_tool_call(item: JsonDict) -> JsonDict:
+    """将单个 Responses `function_call` 项转换为 CC `tool_call` 结构。"""
     return {
         'id': item.get('call_id') or gen_id('call_'),
         'type': 'function',
@@ -833,6 +857,7 @@ def _build_cc_tool_call(item: JsonDict) -> JsonDict:
 
 
 def _build_responses_output(message: JsonDict) -> list[JsonDict]:
+    """将单条聊天补全消息展开为 Responses `output` 数组。"""
     output: list[JsonDict] = []
 
     if message.get('reasoning_content'):
@@ -846,6 +871,7 @@ def _build_responses_output(message: JsonDict) -> list[JsonDict]:
 
 
 def _make_reasoning_output_item(text: str) -> JsonDict:
+    """构造单个 Responses reasoning 输出项。"""
     return {
         'type': 'reasoning',
         'id': gen_id('rs_'),
@@ -854,6 +880,7 @@ def _make_reasoning_output_item(text: str) -> JsonDict:
 
 
 def _make_message_output_item(text: str) -> JsonDict:
+    """构造单个 Responses message 输出项。"""
     return {
         'type': 'message',
         'id': gen_id('msg_'),
@@ -864,6 +891,7 @@ def _make_message_output_item(text: str) -> JsonDict:
 
 
 def _make_function_call_output_item(tool_call: JsonDict) -> JsonDict:
+    """构造单个 Responses function_call 输出项。"""
     function_data = tool_call.get('function') or {}
     return {
         'type': 'function_call',
@@ -876,6 +904,7 @@ def _make_function_call_output_item(tool_call: JsonDict) -> JsonDict:
 
 
 def _build_responses_usage(usage: JsonDict) -> JsonDict:
+    """将 Chat Completions 的 usage 字段映射为 Responses usage 结构。"""
     return {
         'input_tokens': usage.get('prompt_tokens', 0),
         'output_tokens': usage.get('completion_tokens', 0),
@@ -884,6 +913,7 @@ def _build_responses_usage(usage: JsonDict) -> JsonDict:
 
 
 def _collect_cc_parts_from_responses_output(output_items: Any) -> tuple[str, str, list[JsonDict]]:
+    """从 Responses `output` 中提取文本、思考摘要和工具调用。"""
     content_text = ''
     reasoning_text = ''
     tool_calls: list[JsonDict] = []
@@ -906,6 +936,7 @@ def _collect_cc_parts_from_responses_output(output_items: Any) -> tuple[str, str
 
 
 def _extract_reasoning_text(item: JsonDict) -> str:
+    """从 Responses reasoning 项中拼接出完整的摘要文本。"""
     summary = item.get('summary', [])
     if not isinstance(summary, list):
         return ''
@@ -917,6 +948,7 @@ def _extract_reasoning_text(item: JsonDict) -> str:
 
 
 def _build_cc_tool_call_from_responses_output(item: JsonDict, *, index: int) -> JsonDict:
+    """将 Responses `function_call` 输出项转换为 CC `tool_call`。"""
     return {
         'index': index,
         'id': item.get('call_id') or gen_id('call_'),
@@ -929,6 +961,7 @@ def _build_cc_tool_call_from_responses_output(item: JsonDict, *, index: int) -> 
 
 
 def _cc_finish_reason_from_responses(response_data: JsonDict, tool_calls: list[JsonDict]) -> str:
+    """根据 Responses 完成状态推断聊天补全的 finish_reason。"""
     if tool_calls:
         return 'tool_calls'
     if response_data.get('status') == 'incomplete':
@@ -937,10 +970,12 @@ def _cc_finish_reason_from_responses(response_data: JsonDict, tool_calls: list[J
 
 
 def _response_status_from_finish_reason(finish_reason: str) -> str:
+    """将聊天补全 finish_reason 映射为 Responses 顶层状态。"""
     return 'incomplete' if finish_reason == 'length' else 'completed'
 
 
 def _map_anthropic_stop_reason(stop_reason: str) -> str:
+    """将 Anthropic 的 stop_reason 映射为聊天补全风格的结束原因。"""
     return {'tool_use': 'tool_calls', 'max_tokens': 'length'}.get(stop_reason, 'stop')
 
 
@@ -950,6 +985,7 @@ def _map_anthropic_stop_reason(stop_reason: str) -> str:
 
 
 def _extract_text(content: Any) -> str:
+    """从多种内容块结构中提取并拼接纯文本。"""
     if isinstance(content, str):
         return content
     if not isinstance(content, list):
@@ -969,6 +1005,7 @@ def _extract_text(content: Any) -> str:
 
 
 def _content_to_text(content: Any) -> str:
+    """将任意 content 载荷转换为单个字符串。"""
     if isinstance(content, str):
         return content
     if isinstance(content, list):
@@ -977,6 +1014,7 @@ def _content_to_text(content: Any) -> str:
 
 
 def _content_to_responses_parts(content: Any) -> list[JsonDict]:
+    """将普通消息内容转换为 Responses `input_text` 数组。"""
     if isinstance(content, list):
         text = _extract_text(content)
     else:
@@ -985,6 +1023,7 @@ def _content_to_responses_parts(content: Any) -> list[JsonDict]:
 
 
 def _stringify_output(content: Any) -> str:
+    """将工具输出统一序列化为字符串，便于放入 `function_call_output`。"""
     if isinstance(content, str):
         return content
     if content is None:
@@ -993,6 +1032,7 @@ def _stringify_output(content: Any) -> str:
 
 
 def _build_responses_function_call_item(tool_call: JsonDict) -> JsonDict:
+    """将 CC `tool_call` 结构转换为 Responses `function_call` 输入项。"""
     function_data = tool_call.get('function') or {}
     return {
         'type': 'function_call',
@@ -1003,6 +1043,7 @@ def _build_responses_function_call_item(tool_call: JsonDict) -> JsonDict:
 
 
 def _convert_cc_tools_to_responses(tools: Any) -> list[JsonDict]:
+    """将聊天补全风格的工具定义转换为 Responses `tools` 列表。"""
     if not isinstance(tools, list):
         return []
 
@@ -1024,6 +1065,7 @@ def _convert_cc_tools_to_responses(tools: Any) -> list[JsonDict]:
 
 
 def _convert_tools(tools: Any) -> list[JsonDict]:
+    """规范化 Responses 请求中的工具定义列表。"""
     if not isinstance(tools, list):
         return []
 
@@ -1036,6 +1078,7 @@ def _convert_tools(tools: Any) -> list[JsonDict]:
 
 
 def _convert_tool_definition(tool: Any) -> JsonDict | None:
+    """将扁平工具定义补成标准 Chat Completions `function` 工具格式。"""
     if not isinstance(tool, dict):
         return None
     if tool.get('type') != 'function':

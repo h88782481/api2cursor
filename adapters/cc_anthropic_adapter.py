@@ -116,6 +116,7 @@ class AnthropicStreamConverter:
     """
 
     def __init__(self, request_id: str | None = None):
+        """初始化流式转换所需的请求标识、工具索引和 usage 状态。"""
         self._id = request_id or gen_id('chatcmpl-')
         self._tool_index = -1
         self._input_tokens = 0
@@ -509,7 +510,7 @@ def _convert_tools(tools: Any) -> list[JsonDict]:
 
 
 def _convert_tool_definition(tool: Any) -> JsonDict | None:
-    """转换单个工具定义。"""
+    """将 OpenAI 或 Anthropic 风格的工具定义统一转换为 Anthropic `tools` 项。"""
     if not isinstance(tool, dict):
         return None
 

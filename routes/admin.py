@@ -27,11 +27,13 @@ bp = Blueprint('admin', __name__)
 @bp.route('/admin')
 @bp.route('/admin/')
 def admin_page():
+    """返回管理面板首页 HTML 页面，供浏览器进入配置界面。"""
     return send_from_directory(_STATIC_DIR, 'admin.html')
 
 
 @bp.route('/static/<path:filename>')
 def static_files(filename):
+    """提供管理面板所需的静态资源文件。"""
     return send_from_directory(_STATIC_DIR, filename)
 
 
@@ -40,6 +42,7 @@ def static_files(filename):
 
 @bp.route('/v1/models', methods=['GET'])
 def list_models():
+    """返回当前配置的模型列表，供 Cursor 拉取可用模型。"""
     mappings = settings.get().get('model_mappings', {})
     models = [{
         'id': name,
@@ -61,6 +64,7 @@ def list_models():
 
 @bp.route('/api/admin/login', methods=['POST'])
 def admin_login():
+    """校验管理面板登录密钥，并返回是否允许进入后台。"""
     data = request.get_json(force=True)
     if not Config.ACCESS_API_KEY:
         return jsonify({'ok': True, 'message': '未配置鉴权'})
@@ -74,6 +78,7 @@ def admin_login():
 
 @bp.route('/api/admin/settings', methods=['GET'])
 def get_settings():
+    """读取当前生效的全局代理配置。"""
     err = _check_auth()
     if err:
         return err
@@ -88,6 +93,7 @@ def get_settings():
 
 @bp.route('/api/admin/settings', methods=['PUT'])
 def update_settings():
+    """更新全局上游地址与密钥配置。"""
     err = _check_auth()
     if err:
         return err
@@ -104,6 +110,7 @@ def update_settings():
 
 @bp.route('/api/admin/mappings', methods=['GET'])
 def list_mappings():
+    """列出所有模型映射配置，供管理面板读取和展示。"""
     err = _check_auth()
     if err:
         return err
@@ -112,6 +119,7 @@ def list_mappings():
 
 @bp.route('/api/admin/mappings', methods=['POST'])
 def add_mapping():
+    """新增一条模型映射，并写入持久化配置。"""
     err = _check_auth()
     if err:
         return err
@@ -133,6 +141,7 @@ def add_mapping():
 
 @bp.route('/api/admin/mappings/<path:name>', methods=['PUT'])
 def update_mapping(name):
+    """更新指定名称的模型映射，必要时支持重命名。"""
     err = _check_auth()
     if err:
         return err
@@ -158,6 +167,7 @@ def update_mapping(name):
 
 @bp.route('/api/admin/mappings/<path:name>', methods=['DELETE'])
 def delete_mapping(name):
+    """删除指定名称的模型映射，并在存在时同步保存配置。"""
     err = _check_auth()
     if err:
         return err
@@ -185,7 +195,10 @@ def _check_auth():
 
 
 def _save_and_respond(data, log_msg):
-    """保存配置并返回响应"""
+    """保存配置并返回统一成功响应。
+
+    当写盘失败时，这里也负责把异常转成结构化的 JSON 错误返回。
+    """
     try:
         settings.save(data)
     except OSError as e:

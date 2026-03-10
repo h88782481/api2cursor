@@ -22,6 +22,7 @@ bp = Blueprint('messages', __name__)
 
 @bp.route('/v1/messages', methods=['POST'])
 def messages_passthrough():
+    """透传 Anthropic Messages 请求，并在必要时补齐 thinking 兼容层。"""
     payload = request.get_json(force=True)
     model = payload.get('model', 'unknown')
     is_stream = payload.get('stream', False)
@@ -43,6 +44,7 @@ def messages_passthrough():
 
     # 流式透传
     def generate():
+        """建立上游流式连接并逐段回传处理后的 SSE 数据。"""
         try:
             resp = req_lib.post(
                 url, headers=headers, json=payload,
@@ -132,7 +134,7 @@ def _process_stream(resp):
 
 
 def _emit_thinking_blocks(text):
-    """生成 thinking block 的 SSE 事件序列"""
+    """生成一组等价的 Anthropic thinking block SSE 事件。"""
     yield (
         f'event: content_block_start\n'
         f'data: {json.dumps({"type": "content_block_start", "index": 0, "content_block": {"type": "thinking", "thinking": ""}})}\n\n'

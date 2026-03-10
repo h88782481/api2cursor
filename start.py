@@ -19,6 +19,7 @@ from app import create_app
 
 
 def main():
+    """加载应用并以 Waitress 方式启动代理服务。"""
     app = create_app()
     print(f'代理服务启动于 0.0.0.0:{Config.PROXY_PORT}')
     print(f'上游地址: {Config.PROXY_TARGET_URL}')

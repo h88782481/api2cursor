@@ -19,7 +19,11 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class RouteContext:
-    """数据面路由使用的标准请求上下文。"""
+    """数据面路由使用的标准请求上下文。
+
+    路由层会先根据客户端模型名解析出统一上下文，后续处理函数只需要关心
+    上游模型、后端类型、目标地址、鉴权信息和流式标记，而不必重复访问配置层。
+    """
 
     client_model: str
     upstream_model: str

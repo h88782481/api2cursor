@@ -33,6 +33,7 @@ class ThinkTagExtractor:
     """
 
     def __init__(self):
+        """初始化跨 chunk 的 thinking 状态跟踪。"""
         self._in_thinking = False
 
     def process_chunk(self, chunk):

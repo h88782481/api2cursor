@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 
 def gen_id(prefix: str = '') -> str:
-    """生成唯一 ID"""
+    """生成带可选前缀的短随机 ID，用于请求和工具调用标识。"""
     return f'{prefix}{uuid.uuid4().hex[:24]}'
 
 
@@ -57,7 +57,7 @@ def sse_response(generator):
 
 
 def error_json(message, error_type='proxy_error', status=502):
-    """构建 JSON 错误响应"""
+    """构造统一的 JSON 错误响应，供非流式链路直接返回。"""
     return jsonify({'error': {'message': str(message), 'type': error_type}}), status
 
 
