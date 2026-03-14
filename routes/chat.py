@@ -18,6 +18,11 @@ from adapters.cc_anthropic_adapter import (
     cc_to_messages_request,
     messages_to_cc_response,
 )
+from adapters.cc_gemini_adapter import (
+    GeminiStreamConverter,
+    cc_to_gemini_request,
+    gemini_to_cc_response,
+)
 from adapters.openai_compat_fixer import fix_response, fix_stream_chunk, normalize_request
 from adapters.responses_cc_adapter import (
     ResponsesToCCStreamConverter,
@@ -31,6 +36,7 @@ from routes.common import (
     apply_body_modifications,
     apply_header_modifications,
     build_anthropic_target,
+    build_gemini_target,
     build_openai_target,
     build_responses_target,
     build_route_context,
@@ -44,12 +50,27 @@ from routes.common import (
 )
 from utils.http import (
     forward_request,
+    gen_id,
     iter_anthropic_sse,
+    iter_gemini_sse,
     iter_openai_sse,
     iter_responses_sse,
     sse_response,
 )
+from utils.request_logger import (
+    append_client_event,
+    append_upstream_event,
+    attach_client_response,
+    attach_error,
+    attach_upstream_request,
+    attach_upstream_response,
+    finalize_turn,
+    set_stream_summary,
+    start_turn,
+)
 from utils.think_tag import ThinkTagExtractor
+from utils.thinking_cache import thinking_cache
+from utils.usage_tracker import usage_tracker
 
 logger = logging.getLogger(__name__)
 
@@ -65,21 +86,36 @@ def _dbg(message: str) -> None:
 @bp.route('/v1/chat/completions', methods=['POST'])
 def chat_completions():
     """处理聊天补全请求并按模型映射分发到不同后端。"""
-    payload = request.get_json(force=True)
-    payload, message_count = _normalize_chat_payload(payload)
+    original_payload = request.get_json(force=True)
+    payload, message_count = _normalize_chat_payload(json.loads(json.dumps(original_payload, ensure_ascii=False, default=str)))
 
     client_model = payload.get('model', 'unknown')
     is_stream = payload.get('stream', False)
     ctx = build_route_context(client_model, is_stream)
+    turn = start_turn(
+        route='chat',
+        client_model=client_model,
+        backend=ctx.backend,
+        stream=is_stream,
+        client_request=original_payload,
+        request_headers=dict(request.headers),
+        target_url=ctx.target_url,
+        upstream_model=ctx.upstream_model,
+        metadata={'message_count': message_count},
+    )
 
     log_route_context('聊天补全', ctx, extra=f'消息数={message_count}')
     _log_messages(payload)
 
+    payload['messages'] = thinking_cache.inject(payload.get('messages', []))
+
     if ctx.backend == 'openai':
-        return _handle_openai_backend(ctx, payload)
+        return _handle_openai_backend(ctx, payload, turn)
     if ctx.backend == 'responses':
-        return _handle_responses_backend(ctx, payload)
-    return _handle_anthropic_backend(ctx, payload)
+        return _handle_responses_backend(ctx, payload, turn)
+    if ctx.backend == 'gemini':
+        return _handle_gemini_backend(ctx, payload, turn)
+    return _handle_anthropic_backend(ctx, payload, turn)
 
 
 def _normalize_chat_payload(payload: dict[str, Any]) -> tuple[dict[str, Any], int]:
@@ -100,7 +136,7 @@ def _normalize_chat_payload(payload: dict[str, Any]) -> tuple[dict[str, Any], in
     return payload, message_count
 
 
-def _handle_openai_backend(ctx: RouteContext, payload: dict[str, Any]):
+def _handle_openai_backend(ctx: RouteContext, payload: dict[str, Any], turn: dict[str, Any]):
     """处理走 OpenAI 兼容后端的聊天补全请求。"""
     _dbg(
         '原始请求字段=' + str(list(payload.keys())) + ' '
@@ -124,8 +160,8 @@ def _handle_openai_backend(ctx: RouteContext, payload: dict[str, Any]):
     headers = apply_header_modifications(headers, ctx.header_modifications)
 
     if ctx.is_stream:
-        return _handle_openai_stream(ctx, payload, url, headers)
-    return _handle_openai_non_stream(ctx, payload, url, headers)
+        return _handle_openai_stream(ctx, payload, url, headers, turn)
+    return _handle_openai_non_stream(ctx, payload, url, headers, turn)
 
 
 def _handle_openai_non_stream(
@@ -133,18 +169,23 @@ def _handle_openai_non_stream(
     payload: dict[str, Any],
     url: str,
     headers: dict[str, str],
+    turn: dict[str, Any],
 ):
     """处理 OpenAI 兼容后端的非流式返回。"""
     payload['stream'] = False
+    attach_upstream_request(turn, payload, headers)
     resp, err = forward_request(url, headers, payload)
     if err:
+        attach_error(turn, {'stage': 'forward_request', 'message': 'upstream request failed'})
+        finalize_turn(turn)
         return err
 
     raw = resp.json()
+    attach_upstream_response(turn, raw)
     _dbg('上游原始响应=' + json.dumps(raw, ensure_ascii=False, default=str)[:1000])
 
     data = fix_response(raw)
-    return _finalize_chat_response(ctx, data, debug_label='修复后响应')
+    return _finalize_chat_response(ctx, data, turn=turn, debug_label='修复后响应')
 
 
 def _handle_openai_stream(
@@ -152,28 +193,55 @@ def _handle_openai_stream(
     payload: dict[str, Any],
     url: str,
     headers: dict[str, str],
+    turn: dict[str, Any],
 ):
     """处理 OpenAI 兼容后端的流式返回。"""
     payload['stream'] = True
 
     def generate():
         """消费上游 OpenAI SSE，并逐段产出给 Cursor 的聊天补全流。"""
+        attach_upstream_request(turn, payload, headers)
         resp, err = forward_request(url, headers, payload, stream=True)
         if err:
+            attach_error(turn, {'stage': 'forward_request', 'message': str(err)})
+            set_stream_summary(turn, {'status': 'error'})
+            finalize_turn(turn)
             yield chat_error_chunk(str(err))
             return
 
         think_extractor = ThinkTagExtractor()
         chunk_count = 0
+        last_usage = None
+        client_chunks: list[dict[str, Any]] = []
 
         for chunk in iter_openai_sse(resp):
             if chunk is None:
                 _dbg(f'流式响应结束，共 {chunk_count} 个数据片段')
                 close_chunk = think_extractor.finalize()
                 if close_chunk:
+                    client_chunks.append(close_chunk)
+                    append_client_event(turn, {'type': 'chat_chunk', 'data': close_chunk})
                     yield sse_data_message(close_chunk)
+                append_client_event(turn, {'type': 'done'})
                 yield sse_data_message('[DONE]')
+                usage_tracker.record(ctx.client_model, last_usage)
+                set_stream_summary(turn, {
+                    'chunk_count': chunk_count,
+                    'client_chunk_count': len(client_chunks),
+                    'usage': last_usage,
+                })
+                attach_client_response(turn, {
+                    'type': 'chat.completion.stream.summary',
+                    'model': ctx.client_model,
+                    'chunks': client_chunks,
+                    'usage': last_usage,
+                })
+                finalize_turn(turn, usage=last_usage)
                 return
+
+            append_upstream_event(turn, {'type': 'openai_chunk', 'data': chunk})
+            if chunk.get('usage'):
+                last_usage = chunk['usage']
 
             if chunk_count < 10:
                 _dbg(
@@ -185,6 +253,8 @@ def _handle_openai_stream(
             chunk['model'] = ctx.client_model
 
             for out in think_extractor.process_chunk(chunk):
+                client_chunks.append(out)
+                append_client_event(turn, {'type': 'chat_chunk', 'data': out})
                 if chunk_count < 10:
                     _dbg(
                         f'返回片段#{chunk_count}='
@@ -194,10 +264,25 @@ def _handle_openai_stream(
 
             chunk_count += 1
 
+        usage_tracker.record(ctx.client_model, last_usage)
+        set_stream_summary(turn, {
+            'chunk_count': chunk_count,
+            'client_chunk_count': len(client_chunks),
+            'usage': last_usage,
+            'ended_without_done': True,
+        })
+        attach_client_response(turn, {
+            'type': 'chat.completion.stream.summary',
+            'model': ctx.client_model,
+            'chunks': client_chunks,
+            'usage': last_usage,
+        })
+        finalize_turn(turn, usage=last_usage)
+
     return sse_response(generate())
 
 
-def _handle_responses_backend(ctx: RouteContext, payload: dict[str, Any]):
+def _handle_responses_backend(ctx: RouteContext, payload: dict[str, Any], turn: dict[str, Any] | None):
     """处理走原生 Responses 后端的聊天补全请求。
 
     当上游只支持 `/v1/responses` 时，需要先把聊天补全请求转换为 Responses 请求，
@@ -216,8 +301,8 @@ def _handle_responses_backend(ctx: RouteContext, payload: dict[str, Any]):
     headers = apply_header_modifications(headers, ctx.header_modifications)
 
     if ctx.is_stream:
-        return _handle_responses_stream(ctx, responses_payload, url, headers)
-    return _handle_responses_non_stream(ctx, responses_payload, url, headers)
+        return _handle_responses_stream(ctx, responses_payload, url, headers, turn)
+    return _handle_responses_non_stream(ctx, responses_payload, url, headers, turn)
 
 
 def _handle_responses_non_stream(
@@ -225,18 +310,23 @@ def _handle_responses_non_stream(
     payload: dict[str, Any],
     url: str,
     headers: dict[str, str],
+    turn: dict[str, Any] | None,
 ):
     """处理原生 Responses 后端的非流式返回。"""
     payload['stream'] = False
+    attach_upstream_request(turn, payload, headers)
     resp, err = forward_request(url, headers, payload)
     if err:
+        attach_error(turn, {'stage': 'forward_request', 'message': 'upstream request failed'})
+        finalize_turn(turn)
         return err
 
     raw = resp.json()
+    attach_upstream_response(turn, raw)
     _dbg('上游原始响应=' + json.dumps(raw, ensure_ascii=False, default=str)[:1000])
 
     data = responses_to_cc_response(raw, ctx.client_model)
-    return _finalize_chat_response(ctx, data, debug_label='Responses 转回聊天补全后')
+    return _finalize_chat_response(ctx, data, turn=turn, debug_label='Responses 转回聊天补全后')
 
 
 def _handle_responses_stream(
@@ -244,6 +334,7 @@ def _handle_responses_stream(
     payload: dict[str, Any],
     url: str,
     headers: dict[str, str],
+    turn: dict[str, Any] | None,
 ):
     """处理原生 Responses 后端的流式返回。"""
     payload['stream'] = True
@@ -251,13 +342,19 @@ def _handle_responses_stream(
 
     def generate():
         """消费上游 Responses 事件，并实时转换成聊天补全 chunk。"""
+        attach_upstream_request(turn, payload, headers)
         resp, err = forward_request(url, headers, payload, stream=True)
         if err:
+            attach_error(turn, {'stage': 'forward_request', 'message': str(err)})
+            set_stream_summary(turn, {'status': 'error'})
+            finalize_turn(turn)
             yield chat_error_chunk(str(err))
             return
 
         event_count = 0
+        client_chunks: list[Any] = []
         for event_type, event_data in iter_responses_sse(resp):
+            append_upstream_event(turn, {'type': event_type, 'data': event_data})
             if event_count < 10:
                 _dbg(
                     f'上游事件#{event_count} 类型={event_type} 数据='
@@ -265,6 +362,8 @@ def _handle_responses_stream(
                 )
 
             for chunk in converter.process_event(event_type, event_data):
+                client_chunks.append(chunk)
+                append_client_event(turn, {'type': 'chat_chunk', 'data': chunk})
                 if event_count < 10:
                     _dbg(
                         f'返回片段#{event_count}='
@@ -275,12 +374,126 @@ def _handle_responses_stream(
             event_count += 1
 
         _dbg(f'流式响应结束，共 {event_count} 个事件')
+        append_client_event(turn, {'type': 'done'})
         yield sse_data_message('[DONE]')
+        usage_tracker.record(ctx.client_model)
+        set_stream_summary(turn, {
+            'event_count': event_count,
+            'client_chunk_count': len(client_chunks),
+        })
+        attach_client_response(turn, {
+            'type': 'chat.completion.stream.summary',
+            'model': ctx.client_model,
+            'chunks': client_chunks,
+        })
+        finalize_turn(turn)
 
     return sse_response(generate())
 
 
-def _handle_anthropic_backend(ctx: RouteContext, payload: dict[str, Any]):
+def _handle_gemini_backend(ctx: RouteContext, payload: dict[str, Any], turn: dict[str, Any] | None):
+    """处理走 Gemini Contents 后端的聊天补全请求。"""
+    payload = inject_instructions_cc(payload, ctx.custom_instructions, ctx.instructions_position)
+    gemini_payload = cc_to_gemini_request(payload)
+    _dbg(
+        '已转换为 Gemini 请求：字段=' + str(list(gemini_payload.keys()))
+        + f' 内容数={len(gemini_payload.get("contents", []))}'
+    )
+
+    url, headers = build_gemini_target(ctx, stream=ctx.is_stream)
+    gemini_payload = apply_body_modifications(gemini_payload, ctx.body_modifications)
+    headers = apply_header_modifications(headers, ctx.header_modifications)
+
+    if ctx.is_stream:
+        return _handle_gemini_stream(ctx, gemini_payload, url, headers, turn)
+    return _handle_gemini_non_stream(ctx, gemini_payload, url, headers, turn)
+
+
+def _handle_gemini_non_stream(
+    ctx: RouteContext,
+    payload: dict[str, Any],
+    url: str,
+    headers: dict[str, str],
+    turn: dict[str, Any] | None,
+):
+    """处理 Gemini 后端的非流式返回。"""
+    attach_upstream_request(turn, payload, headers)
+    resp, err = forward_request(url, headers, payload)
+    if err:
+        attach_error(turn, {'stage': 'forward_request', 'message': 'upstream request failed'})
+        finalize_turn(turn)
+        return err
+
+    raw = resp.json()
+    attach_upstream_response(turn, raw)
+    _dbg('上游原始响应=' + json.dumps(raw, ensure_ascii=False, default=str)[:1000])
+
+    data = gemini_to_cc_response(raw)
+    return _finalize_chat_response(ctx, data, turn=turn, debug_label='Gemini 转回聊天补全后')
+
+
+def _handle_gemini_stream(
+    ctx: RouteContext,
+    payload: dict[str, Any],
+    url: str,
+    headers: dict[str, str],
+    turn: dict[str, Any] | None,
+):
+    """处理 Gemini 后端的流式返回。"""
+    converter = GeminiStreamConverter()
+
+    def generate():
+        attach_upstream_request(turn, payload, headers)
+        resp, err = forward_request(url, headers, payload, stream=True)
+        if err:
+            attach_error(turn, {'stage': 'forward_request', 'message': str(err)})
+            set_stream_summary(turn, {'status': 'error'})
+            finalize_turn(turn)
+            yield chat_error_chunk(str(err))
+            return
+
+        chunk_count = 0
+        client_chunks: list[Any] = []
+        for gemini_chunk in iter_gemini_sse(resp):
+            append_upstream_event(turn, {'type': 'gemini_chunk', 'data': gemini_chunk})
+            if chunk_count < 10:
+                _dbg(
+                    f'上游 Gemini 片段#{chunk_count}='
+                    + json.dumps(gemini_chunk, ensure_ascii=False, default=str)[:500]
+                )
+
+            for cc_chunk in converter.process_chunk(gemini_chunk):
+                cc_chunk['model'] = ctx.client_model
+                client_chunks.append(cc_chunk)
+                append_client_event(turn, {'type': 'chat_chunk', 'data': cc_chunk})
+                if chunk_count < 10:
+                    _dbg(
+                        f'返回片段#{chunk_count}='
+                        + json.dumps(cc_chunk, ensure_ascii=False, default=str)[:500]
+                    )
+                yield sse_data_message(cc_chunk)
+
+            chunk_count += 1
+
+        _dbg(f'流式响应结束，共 {chunk_count} 个数据片段')
+        append_client_event(turn, {'type': 'done'})
+        yield sse_data_message('[DONE]')
+        usage_tracker.record(ctx.client_model)
+        set_stream_summary(turn, {
+            'chunk_count': chunk_count,
+            'client_chunk_count': len(client_chunks),
+        })
+        attach_client_response(turn, {
+            'type': 'chat.completion.stream.summary',
+            'model': ctx.client_model,
+            'chunks': client_chunks,
+        })
+        finalize_turn(turn)
+
+    return sse_response(generate())
+
+
+def _handle_anthropic_backend(ctx: RouteContext, payload: dict[str, Any], turn: dict[str, Any] | None):
     """处理走 Anthropic Messages 后端的聊天补全请求。"""
     payload['model'] = ctx.upstream_model
     anthropic_payload = cc_to_messages_request(payload)
@@ -295,8 +508,8 @@ def _handle_anthropic_backend(ctx: RouteContext, payload: dict[str, Any]):
     headers = apply_header_modifications(headers, ctx.header_modifications)
 
     if ctx.is_stream:
-        return _handle_anthropic_stream(ctx, anthropic_payload, url, headers)
-    return _handle_anthropic_non_stream(ctx, anthropic_payload, url, headers)
+        return _handle_anthropic_stream(ctx, anthropic_payload, url, headers, turn)
+    return _handle_anthropic_non_stream(ctx, anthropic_payload, url, headers, turn)
 
 
 def _handle_anthropic_non_stream(
@@ -304,18 +517,23 @@ def _handle_anthropic_non_stream(
     payload: dict[str, Any],
     url: str,
     headers: dict[str, str],
+    turn: dict[str, Any] | None,
 ):
     """处理 Anthropic 后端的非流式返回。"""
     payload['stream'] = False
+    attach_upstream_request(turn, payload, headers)
     resp, err = forward_request(url, headers, payload)
     if err:
+        attach_error(turn, {'stage': 'forward_request', 'message': 'upstream request failed'})
+        finalize_turn(turn)
         return err
 
     raw = resp.json()
+    attach_upstream_response(turn, raw)
     _dbg('上游原始响应=' + json.dumps(raw, ensure_ascii=False, default=str)[:1000])
 
     data = messages_to_cc_response(raw)
-    return _finalize_chat_response(ctx, data, debug_label='Messages 转回聊天补全后')
+    return _finalize_chat_response(ctx, data, turn=turn, debug_label='Messages 转回聊天补全后')
 
 
 def _handle_anthropic_stream(
@@ -323,6 +541,7 @@ def _handle_anthropic_stream(
     payload: dict[str, Any],
     url: str,
     headers: dict[str, str],
+    turn: dict[str, Any] | None,
 ):
     """处理 Anthropic 后端的流式返回。
 
@@ -334,13 +553,19 @@ def _handle_anthropic_stream(
 
     def generate():
         """消费上游 Anthropic 事件流，并逐步映射为聊天补全 SSE。"""
+        attach_upstream_request(turn, payload, headers)
         resp, err = forward_request(url, headers, payload, stream=True)
         if err:
+            attach_error(turn, {'stage': 'forward_request', 'message': str(err)})
+            set_stream_summary(turn, {'status': 'error'})
+            finalize_turn(turn)
             yield chat_error_chunk(str(err))
             return
 
         event_count = 0
+        client_chunks: list[Any] = []
         for event_type, event_data in iter_anthropic_sse(resp):
+            append_upstream_event(turn, {'type': event_type, 'data': event_data})
             if event_count < 10:
                 _dbg(
                     f'上游事件#{event_count} 类型={event_type} 数据='
@@ -355,6 +580,8 @@ def _handle_anthropic_stream(
                 except (json.JSONDecodeError, TypeError):
                     pass
 
+                client_chunks.append(chunk_str)
+                append_client_event(turn, {'type': 'chat_chunk', 'data': chunk_str})
                 if event_count < 10:
                     _dbg(f'返回片段#{event_count}={chunk_str[:500]}')
                 yield sse_data_message(chunk_str)
@@ -362,7 +589,19 @@ def _handle_anthropic_stream(
             event_count += 1
 
         _dbg(f'流式响应结束，共 {event_count} 个事件')
+        append_client_event(turn, {'type': 'done'})
         yield sse_data_message('[DONE]')
+        usage_tracker.record(ctx.client_model)
+        set_stream_summary(turn, {
+            'event_count': event_count,
+            'client_chunk_count': len(client_chunks),
+        })
+        attach_client_response(turn, {
+            'type': 'chat.completion.stream.summary',
+            'model': ctx.client_model,
+            'chunks': client_chunks,
+        })
+        finalize_turn(turn)
 
     return sse_response(generate())
 
@@ -371,6 +610,7 @@ def _finalize_chat_response(
     ctx: RouteContext,
     data: dict[str, Any],
     *,
+    turn: dict[str, Any] | None,
     debug_label: str,
 ):
     """统一收尾非流式聊天补全响应。
@@ -383,6 +623,20 @@ def _finalize_chat_response(
     data['model'] = ctx.client_model
     _dbg(debug_label + '=' + json.dumps(data, ensure_ascii=False, default=str)[:1000])
     log_usage('聊天补全', data.get('usage', {}), input_key='prompt_tokens', output_key='completion_tokens')
+
+    usage_tracker.record(ctx.client_model, data.get('usage'))
+    attach_client_response(turn, data)
+    finalize_turn(turn, usage=data.get('usage'))
+
+    for choice in data.get('choices', []):
+        msg = choice.get('message', {})
+        if msg.get('reasoning_content'):
+            thinking_cache.store_from_response(
+                request.get_json(silent=True, force=True).get('messages', []),
+                msg['reasoning_content'],
+            )
+            break
+
     return jsonify(data)
 
 

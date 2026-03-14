@@ -12,7 +12,7 @@ import logging
 from typing import Any
 
 import settings
-from utils.http import build_anthropic_headers, build_openai_headers
+from utils.http import build_anthropic_headers, build_gemini_headers, build_openai_headers
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +73,22 @@ def build_anthropic_target(ctx: RouteContext) -> tuple[str, dict[str, str]]:
     """根据路由上下文生成 Anthropic 后端的地址和请求头。"""
     url = f'{ctx.target_url.rstrip("/")}/v1/messages'
     headers = build_anthropic_headers(ctx.api_key)
+    return url, headers
+
+
+def build_gemini_target(ctx: RouteContext, stream: bool = False) -> tuple[str, dict[str, str]]:
+    """根据路由上下文生成 Gemini 后端的地址和请求头。
+
+    Gemini URL 格式: {base}/v1/models/{model}:generateContent
+    流式: {base}/v1/models/{model}:streamGenerateContent?alt=sse
+    """
+    base = ctx.target_url.rstrip('/')
+    model = ctx.upstream_model
+    if stream:
+        url = f'{base}/v1/models/{model}:streamGenerateContent?alt=sse'
+    else:
+        url = f'{base}/v1/models/{model}:generateContent'
+    headers = build_gemini_headers(ctx.api_key)
     return url, headers
 
 

@@ -70,8 +70,36 @@ async function loadDashboard() {
     document.getElementById('envKey').textContent = s.env_api_key ? '环境变量: (已配置)' : '环境变量: (未设置)';
     await loadMappings();
     checkHealth();
+    loadStats();
   } catch (e) {
     toast('加载设置失败: ' + e.message, false);
+  }
+}
+
+async function loadStats() {
+  const el = document.getElementById('statsContent');
+  try {
+    const data = await api('/api/admin/stats');
+    const models = data.models || {};
+    const keys = Object.keys(models);
+    if (!keys.length) {
+      el.innerHTML = '<div class="empty">暂无请求统计数据</div>';
+      return;
+    }
+    const uptime = data.uptime_seconds || 0;
+    const h = Math.floor(uptime / 3600);
+    const m = Math.floor((uptime % 3600) / 60);
+    let html = '<div class="hint" style="margin-bottom:12px">运行时长: ' + h + '小时' + m + '分钟</div>';
+    html += '<table class="stats-table"><thead><tr><th>模型</th><th>请求数</th><th>输入 Tokens</th><th>输出 Tokens</th><th>总 Tokens</th></tr></thead><tbody>';
+    keys.sort((a, b) => models[b].request_count - models[a].request_count);
+    for (const name of keys) {
+      const s = models[name];
+      html += '<tr><td>' + esc(name) + '</td><td>' + s.request_count + '</td><td>' + s.input_tokens.toLocaleString() + '</td><td>' + s.output_tokens.toLocaleString() + '</td><td>' + s.total_tokens.toLocaleString() + '</td></tr>';
+    }
+    html += '</tbody></table>';
+    el.innerHTML = html;
+  } catch (e) {
+    el.innerHTML = '<div class="empty">加载统计失败</div>';
   }
 }
 
@@ -130,7 +158,9 @@ async function loadMappings() {
         ? 'tag-responses'
         : backend === 'openai'
           ? 'tag-openai'
-          : 'tag-auto';
+          : backend === 'gemini'
+            ? 'tag-gemini'
+            : 'tag-auto';
     const tagLabel = backend === 'auto'
       ? '自动'
       : backend === 'responses'

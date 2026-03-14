@@ -311,6 +311,7 @@ def _fix_stream_choice(choice: Any) -> None:
 
     _promote_reasoning_field(delta)
     _convert_legacy_delta_function_call(delta, choice)
+    _sanitize_tool_call_deltas(delta)
     _ensure_stream_tool_calls(delta)
     _rewrite_function_call_finish_reason(choice)
 
@@ -330,6 +331,25 @@ def _convert_legacy_delta_function_call(delta: JsonDict, choice: JsonDict) -> No
 
     delta['tool_calls'] = [tool_call]
     _rewrite_function_call_finish_reason(choice)
+
+
+def _sanitize_tool_call_deltas(delta: JsonDict) -> None:
+    """清理流式 tool_calls 中的空白字段。
+
+    某些 OpenAI 兼容提供商在后续 tool_calls chunk 中错误地发送空字符串的
+    id/type/function.name，导致 Cursor 用空值覆盖真实值。
+    不处理 function.arguments，因为空字符串是合法的增量拼接值。
+    """
+    for tc in delta.get('tool_calls') or []:
+        if not isinstance(tc, dict):
+            continue
+        if 'id' in tc and not str(tc['id']).strip():
+            del tc['id']
+        if 'type' in tc and not str(tc['type']).strip():
+            del tc['type']
+        func = tc.get('function')
+        if isinstance(func, dict) and 'name' in func and not str(func['name']).strip():
+            del func['name']
 
 
 def _ensure_stream_tool_calls(delta: JsonDict) -> None:

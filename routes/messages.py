@@ -15,6 +15,17 @@ import settings
 from config import Config
 from routes.common import apply_body_modifications, apply_header_modifications, inject_instructions_anthropic
 from utils.http import build_anthropic_headers, forward_request, sse_response
+from utils.request_logger import (
+    append_client_event,
+    append_upstream_event,
+    attach_client_response,
+    attach_error,
+    attach_upstream_request,
+    attach_upstream_response,
+    finalize_turn,
+    set_stream_summary,
+    start_turn,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +35,8 @@ bp = Blueprint('messages', __name__)
 @bp.route('/v1/messages', methods=['POST'])
 def messages_passthrough():
     """透传 Anthropic Messages 请求，并在必要时补齐 thinking 兼容层。"""
-    payload = request.get_json(force=True)
+    original_payload = request.get_json(force=True)
+    payload = json.loads(json.dumps(original_payload, ensure_ascii=False, default=str))
     model = payload.get('model', 'unknown')
     is_stream = payload.get('stream', False)
 
@@ -41,20 +53,37 @@ def messages_passthrough():
     headers = apply_header_modifications(headers, header_mods)
     url = f'{url_base.rstrip("/")}/v1/messages'
 
+    turn = start_turn(
+        route='messages',
+        client_model=model,
+        backend='anthropic',
+        stream=is_stream,
+        client_request=original_payload,
+        request_headers=dict(request.headers),
+        target_url=url_base,
+        upstream_model=model,
+    )
+
     payload = inject_instructions_anthropic(payload, custom_instructions, instructions_position)
     payload = apply_body_modifications(payload, body_mods)
 
     if not is_stream:
+        attach_upstream_request(turn, payload, headers)
         resp, err = forward_request(url, headers, payload)
         if err:
+            attach_error(turn, {'stage': 'forward_request', 'message': 'upstream request failed'})
+            finalize_turn(turn)
             return err
         data = resp.json()
+        attach_upstream_response(turn, data)
         _inject_thinking(data)
+        attach_client_response(turn, data)
+        finalize_turn(turn)
         return jsonify(data)
 
-    # 流式透传
     def generate():
         """建立上游流式连接并逐段回传处理后的 SSE 数据。"""
+        attach_upstream_request(turn, payload, headers)
         try:
             resp = req_lib.post(
                 url, headers=headers, json=payload,
@@ -63,12 +92,28 @@ def messages_passthrough():
             if resp.status_code != 200:
                 body = resp.content.decode('utf-8', errors='replace')
                 logger.warning(f'上游返回 {resp.status_code}: {body[:300]}')
+                attach_error(turn, {'stage': 'upstream_status', 'status_code': resp.status_code, 'message': body})
+                set_stream_summary(turn, {'status': 'error'})
+                finalize_turn(turn)
                 yield f'data: {json.dumps({"error": {"message": body, "type": "upstream_error"}})}\n\n'
                 return
 
-            yield from _process_stream(resp)
+            summary = {'upstream_event_count': 0, 'client_event_count': 0}
+            client_events = []
+            for out in _process_stream(resp, turn=turn, summary=summary):
+                client_events.append(out)
+                yield out
+            set_stream_summary(turn, summary)
+            attach_client_response(turn, {
+                'type': 'messages.stream.summary',
+                'events': client_events,
+            })
+            finalize_turn(turn)
         except req_lib.RequestException as e:
             logger.error(f'请求上游失败: {e}')
+            attach_error(turn, {'stage': 'request_exception', 'message': str(e)})
+            set_stream_summary(turn, {'status': 'error'})
+            finalize_turn(turn)
             yield f'data: {json.dumps({"error": {"message": str(e), "type": "proxy_error"}})}\n\n'
 
     return sse_response(generate())
@@ -96,7 +141,7 @@ def _inject_thinking(data):
     logger.info(f'已注入 thinking block ({len(rc)} 字符)')
 
 
-def _process_stream(resp):
+def _process_stream(resp, *, turn=None, summary: dict[str, int] | None = None):
     """处理 /v1/messages 流式响应，检测并注入 thinking 事件
 
     追踪上游 content block 的 index，在注入 thinking blocks 时使用独立的 index，
@@ -105,11 +150,15 @@ def _process_stream(resp):
     reasoning_buf = ''
     injected = False
     index_offset = 0
+    if summary is None:
+        summary = {'upstream_event_count': 0, 'client_event_count': 0}
 
     for line in resp.iter_lines():
         if not line:
             continue
         decoded = line.decode('utf-8', errors='replace')
+        append_upstream_event(turn, {'raw': decoded})
+        summary['upstream_event_count'] += 1
 
         if not decoded.startswith('data:'):
             yield decoded + '\n\n'
@@ -140,7 +189,10 @@ def _process_stream(resp):
         if reasoning_buf and not injected:
             if event_data.get('delta', {}).get('type') == 'text_delta':
                 injected = True
-                yield from _emit_thinking_blocks(reasoning_buf)
+                for injected_event in _emit_thinking_blocks(reasoning_buf):
+                    append_client_event(turn, {'raw': injected_event})
+                    summary['client_event_count'] += 1
+                    yield injected_event
                 index_offset = 1
                 reasoning_buf = ''
 
@@ -148,7 +200,10 @@ def _process_stream(resp):
             event_data['index'] = event_data['index'] + index_offset
             modified = True
 
-        yield f'data: {json.dumps(event_data)}\n\n' if modified else decoded + '\n\n'
+        output = f'data: {json.dumps(event_data)}\n\n' if modified else decoded + '\n\n'
+        append_client_event(turn, {'raw': output})
+        summary['client_event_count'] += 1
+        yield output
 
 
 def _emit_thinking_blocks(text):

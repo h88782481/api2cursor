@@ -59,12 +59,18 @@ main{padding:28px 0 60px}
 .tag-anthropic{background:rgba(249,115,22,.15);color:#fb923c}
 .tag-openai{background:rgba(16,185,129,.15);color:#34d399}
 .tag-responses{background:rgba(59,130,246,.15);color:#60a5fa}
+.tag-gemini{background:rgba(66,133,244,.15);color:#4285f4}
 .tag-auto{background:rgba(139,92,246,.15);color:#a78bfa}
 .tag-override{background:rgba(59,130,246,.1);color:var(--primary)}
 .tag-instructions{background:rgba(234,179,8,.15);color:var(--yellow)}
 .tag-mods{background:rgba(168,85,247,.15);color:#c084fc}
 .mapping-actions{margin-left:auto;display:flex;gap:6px}
 .empty{text-align:center;padding:40px;color:var(--muted)}
+
+.stats-table{width:100%;border-collapse:collapse;font-size:13px}
+.stats-table th{text-align:left;color:var(--muted);font-weight:500;padding:8px 12px;border-bottom:1px solid var(--border)}
+.stats-table td{padding:8px 12px;border-bottom:1px solid var(--border)}
+.stats-table tr:hover{background:var(--surface)}
 
 .modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:100;align-items:center;justify-content:center}
 .modal-overlay.active{display:flex}

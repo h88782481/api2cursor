@@ -62,7 +62,9 @@ def cc_to_messages_request(payload: JsonDict) -> JsonDict:
             anthropic_messages.append(converted)
 
     anthropic_messages = _merge_same_role(anthropic_messages)
-    return _build_messages_request(payload, anthropic_messages, system_parts)
+    result = _build_messages_request(payload, anthropic_messages, system_parts)
+    optimize_cache_control(result)
+    return result
 
 
 # ═══════════════════════════════════════════════════════════
@@ -560,3 +562,141 @@ def _merge_same_role(messages: list[JsonDict]) -> list[JsonDict]:
         else:
             merged.append(message)
     return merged
+
+
+# ═══════════════════════════════════════════════════════════
+#  Anthropic cache_control 优化
+# ═══════════════════════════════════════════════════════════
+
+_MAX_BREAKPOINTS = 4
+_BLOCK_WINDOW = 20
+_EPHEMERAL = {'type': 'ephemeral'}
+
+
+def optimize_cache_control(request: JsonDict) -> None:
+    """自动设置最优的 Anthropic cache_control 断点。
+
+    算法移植自 CursorProxy 的 ensure_cache_control.go：
+    1. 归一化所有消息 content 为数组格式
+    2. 清空所有已有 cache_control
+    3. 注入结构锚点（tools 末尾 + system 末尾）
+    4. 注入消息锚点（最后一个可缓存块 + 窗口边界）
+    5. 总断点数不超过 4 个
+    """
+    _normalize_message_contents(request)
+    _clear_all_cache_controls(request)
+
+    structural = _inject_structural_anchors(request)
+    remaining = _MAX_BREAKPOINTS - structural
+    if remaining <= 0:
+        return
+
+    refs = _collect_cacheable_block_refs(request)
+    if not refs:
+        return
+
+    desired = 1 if len(refs) < _BLOCK_WINDOW else 2
+    anchors = min(desired, remaining)
+
+    if anchors >= 1 and refs:
+        refs[-1]['cache_control'] = _EPHEMERAL
+
+    if anchors >= 2 and len(refs) > 1:
+        target = len(refs) - _BLOCK_WINDOW
+        idx = _pick_window_anchor(refs, target)
+        if idx is not None and idx != len(refs) - 1:
+            refs[idx]['cache_control'] = _EPHEMERAL
+
+
+def _normalize_message_contents(request: JsonDict) -> None:
+    """将所有消息的 content 统一转为数组格式。"""
+    for msg in request.get('messages', []):
+        content = msg.get('content')
+        if isinstance(content, str):
+            msg['content'] = [{'type': 'text', 'text': content}]
+        elif content is None:
+            msg['content'] = []
+
+
+def _clear_all_cache_controls(request: JsonDict) -> None:
+    """清空所有已有的 cache_control 字段。"""
+    for tool in request.get('tools', []):
+        tool.pop('cache_control', None)
+
+    system = request.get('system')
+    if isinstance(system, list):
+        for block in system:
+            if isinstance(block, dict):
+                block.pop('cache_control', None)
+
+    for msg in request.get('messages', []):
+        content = msg.get('content')
+        if isinstance(content, list):
+            for block in content:
+                if isinstance(block, dict):
+                    block.pop('cache_control', None)
+
+
+def _inject_structural_anchors(request: JsonDict) -> int:
+    """在 tools 末尾和 system 末尾注入结构锚点，返回注入数量。"""
+    count = 0
+
+    tools = request.get('tools')
+    if tools and isinstance(tools, list):
+        tools[-1]['cache_control'] = _EPHEMERAL
+        count += 1
+
+    system = request.get('system')
+    if isinstance(system, list) and system:
+        last = system[-1]
+        if isinstance(last, dict):
+            last['cache_control'] = _EPHEMERAL
+            count += 1
+    elif isinstance(system, str) and system:
+        request['system'] = [
+            {'type': 'text', 'text': system, 'cache_control': _EPHEMERAL}
+        ]
+        count += 1
+
+    return count
+
+
+def _is_cacheable_block(block: Any) -> bool:
+    """判断一个内容块是否可以设置 cache_control。"""
+    if not isinstance(block, dict):
+        return False
+    block_type = block.get('type', '')
+    if block_type in ('thinking', 'redacted_thinking'):
+        return False
+    if block_type == 'text' and not block.get('text'):
+        return False
+    return True
+
+
+def _collect_cacheable_block_refs(request: JsonDict) -> list[JsonDict]:
+    """收集所有消息中可缓存块的引用列表。"""
+    refs: list[JsonDict] = []
+    for msg in request.get('messages', []):
+        content = msg.get('content')
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if _is_cacheable_block(block):
+                refs.append(block)
+    return refs
+
+
+def _pick_window_anchor(refs: list[JsonDict], target: int) -> int | None:
+    """在目标位置附近选择一个窗口锚点，优先左侧。"""
+    if target < 0:
+        target = 0
+    if target >= len(refs):
+        return None
+
+    for i in range(target, -1, -1):
+        if 'cache_control' not in refs[i]:
+            return i
+    for i in range(target + 1, len(refs)):
+        if 'cache_control' not in refs[i]:
+            return i
+    return None

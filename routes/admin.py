@@ -188,6 +188,19 @@ def delete_mapping(name):
     return jsonify({'ok': True})
 
 
+# ─── 用量统计 ─────────────────────────────────────
+
+
+@bp.route('/api/admin/stats', methods=['GET'])
+def get_stats():
+    """返回运行时用量统计数据。"""
+    err = _check_auth()
+    if err:
+        return err
+    from utils.usage_tracker import usage_tracker
+    return jsonify(usage_tracker.get_stats())
+
+
 # ─── 内部辅助 ─────────────────────────────────────
 
 

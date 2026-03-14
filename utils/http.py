@@ -44,6 +44,16 @@ def build_anthropic_headers(api_key: str) -> dict[str, str]:
     return headers
 
 
+def build_gemini_headers(api_key: str) -> dict[str, str]:
+    """构建 Gemini 请求头，根据密钥前缀选择鉴权方式"""
+    headers = {'Content-Type': 'application/json'}
+    if api_key.startswith('AIza'):
+        headers['x-goog-api-key'] = api_key
+    else:
+        headers['Authorization'] = f'Bearer {api_key}'
+    return headers
+
+
 # ─── 响应构建 ──────────────────────────────────────
 
 
@@ -123,6 +133,26 @@ def iter_anthropic_sse(response) -> Iterator[tuple[str, dict[str, Any]]]:
 def iter_responses_sse(response) -> Iterator[tuple[str, dict[str, Any]]]:
     """解析 OpenAI Responses SSE 流，yield (event_type, data_dict) 元组"""
     yield from _iter_event_sse(response)
+
+
+def iter_gemini_sse(response) -> Iterator[dict[str, Any]]:
+    """解析 Gemini SSE 流，yield 完整的 GenerateContentResponse 字典。
+
+    Gemini 流式使用 ?alt=sse，每个 data: 行是一个完整的 JSON 响应。
+    """
+    for line in response.iter_lines():
+        if not line:
+            continue
+        decoded = line.decode('utf-8', errors='replace')
+        if not decoded.startswith('data:'):
+            continue
+        data_str = decoded[5:].strip()
+        if not data_str:
+            continue
+        try:
+            yield json.loads(data_str)
+        except json.JSONDecodeError:
+            continue
 
 
 def _iter_event_sse(response) -> Iterator[tuple[str, dict[str, Any]]]:

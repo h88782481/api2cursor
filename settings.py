@@ -118,4 +118,8 @@ def _auto_detect(name):
     其余模型默认视为 OpenAI 兼容后端。
     """
     lower = (name or '').lower()
-    return 'anthropic' if ('claude' in lower or 'anthropic' in lower) else 'openai'
+    if 'claude' in lower or 'anthropic' in lower:
+        return 'anthropic'
+    if 'gemini' in lower:
+        return 'gemini'
+    return 'openai'
