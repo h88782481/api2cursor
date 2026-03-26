@@ -21,6 +21,7 @@ from routes.common import (
     get_outbound,
     inject_instructions_cc,
     log_route_context,
+    should_inject_thinking,
 )
 from utils.request_logger import start_turn
 from utils.thinking_cache import thinking_cache
@@ -58,7 +59,8 @@ def chat_completions():
 
     payload['model'] = ctx.upstream_model
     payload = normalize_request(payload)
-    payload['messages'] = thinking_cache.inject(payload.get('messages', []))
+    if should_inject_thinking(ctx.backend):
+        payload['messages'] = thinking_cache.inject(payload.get('messages', []))
     payload = inject_instructions_cc(payload, ctx.custom_instructions, ctx.instructions_position)
 
     outbound = get_outbound(ctx.backend)

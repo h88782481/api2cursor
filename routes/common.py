@@ -173,6 +173,20 @@ def inject_instructions_anthropic(payload: dict[str, Any], instructions: str, po
     return payload
 
 
+def should_inject_thinking(backend: str) -> bool:
+    """判断当前后端是否需要注入历史 thinking。
+
+    仅对明确能消费历史 reasoning/thinking 的后端启用：
+    - anthropic
+    - gemini
+    - responses
+
+    OpenAI Chat 兼容后端通常不接受 `reasoning_content` 历史字段，
+    若注入会导致上游报错，因此显式排除。
+    """
+    return backend in ('anthropic', 'gemini', 'responses')
+
+
 # ─── Body / Header 修改 ──────────────────────────
 
 

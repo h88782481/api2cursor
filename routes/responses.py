@@ -28,6 +28,7 @@ from routes.common import (
     inject_instructions_cc,
     inject_instructions_responses,
     log_route_context,
+    should_inject_thinking,
 )
 from utils.request_logger import start_turn
 from utils.thinking_cache import thinking_cache
@@ -94,6 +95,7 @@ def _build_cc_payload(payload: dict[str, Any], ctx) -> dict[str, Any]:
     cc_payload = responses_to_cc(payload)
     cc_payload['model'] = ctx.upstream_model
     cc_payload = normalize_request(cc_payload)
-    cc_payload['messages'] = thinking_cache.inject(cc_payload.get('messages', []))
+    if should_inject_thinking(ctx.backend):
+        cc_payload['messages'] = thinking_cache.inject(cc_payload.get('messages', []))
     cc_payload = inject_instructions_cc(cc_payload, ctx.custom_instructions, ctx.instructions_position)
     return cc_payload
