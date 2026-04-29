@@ -582,38 +582,16 @@ _EPHEMERAL = {'type': 'ephemeral'}
 
 
 def optimize_cache_control(request: JsonDict) -> None:
-    """自动设置最优的 Anthropic cache_control 断点。
+    """为 Anthropic Messages 请求启用顶层自动 prompt caching。
 
-    算法移植自 CursorProxy 的 ensure_cache_control.go：
-    1. 归一化所有消息 content 为数组格式
-    2. 清空所有已有 cache_control
-    3. 注入结构锚点（tools 末尾 + system 末尾）
-    4. 注入消息锚点（最后一个可缓存块 + 窗口边界）
-    5. 总断点数不超过 4 个
+    2026 版 Claude API 已支持在请求顶层使用 `cache_control` 开启自动缓存，
+    由上游自动把断点放到最后一个可缓存块并随多轮对话前移。相比手动在嵌套
+    content blocks 上打断点，这种方式对 Anthropic 兼容中转站更稳定，也更接近
+    `/v1/responses` 通过顶层字段启用缓存的思路。
     """
     _normalize_message_contents(request)
     _clear_all_cache_controls(request)
-
-    structural = _inject_structural_anchors(request)
-    remaining = _MAX_BREAKPOINTS - structural
-    if remaining <= 0:
-        return
-
-    refs = _collect_cacheable_block_refs(request)
-    if not refs:
-        return
-
-    desired = 1 if len(refs) < _BLOCK_WINDOW else 2
-    anchors = min(desired, remaining)
-
-    if anchors >= 1 and refs:
-        refs[-1]['cache_control'] = _EPHEMERAL
-
-    if anchors >= 2 and len(refs) > 1:
-        target = len(refs) - _BLOCK_WINDOW
-        idx = _pick_window_anchor(refs, target)
-        if idx is not None and idx != len(refs) - 1:
-            refs[idx]['cache_control'] = _EPHEMERAL
+    request['cache_control'] = dict(_EPHEMERAL)
 
 
 def _normalize_message_contents(request: JsonDict) -> None:
@@ -628,6 +606,7 @@ def _normalize_message_contents(request: JsonDict) -> None:
 
 def _clear_all_cache_controls(request: JsonDict) -> None:
     """清空所有已有的 cache_control 字段。"""
+    request.pop('cache_control', None)
     for tool in request.get('tools', []):
         tool.pop('cache_control', None)
 
