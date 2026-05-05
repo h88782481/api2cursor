@@ -117,7 +117,10 @@ async function loadRequestLogs() {
     let html = '<div class="request-logs-wrap"><table class="stats-table request-logs-table"><thead><tr><th>请求时间</th><th>请求模型</th><th>实际模型</th><th>上游 URL</th><th>Tokens</th><th>耗时</th><th>状态</th></tr></thead><tbody>';
     for (const item of items) {
       const usage = item.usage || {};
-      const tokens = '输 ' + fmtNum(usage.input_tokens) + ' / 出 ' + fmtNum(usage.output_tokens) + ' / 总 ' + fmtNum(usage.total_tokens);
+      let tokens = '输 ' + fmtNum(usage.input_tokens) + ' / 出 ' + fmtNum(usage.output_tokens) + ' / 总 ' + fmtNum(usage.total_tokens);
+      if (Number(usage.cache_read_tokens || 0) > 0 || Number(usage.cache_write_tokens || 0) > 0) {
+        tokens += ' / 缓存读 ' + fmtNum(usage.cache_read_tokens) + ' / 缓存写 ' + fmtNum(usage.cache_write_tokens);
+      }
       const statusClass = item.status === 'ok' ? 'status-ok' : 'status-error';
       const statusText = item.status === 'ok' ? '成功' : '异常';
       html += '<tr>'

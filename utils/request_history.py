@@ -39,10 +39,24 @@ def _normalize_usage(usage: dict[str, Any] | None) -> dict[str, int]:
         usage.get('completion_tokens', usage.get('output_tokens', 0))
     )
     total_tokens = _safe_int(usage.get('total_tokens', input_tokens + output_tokens))
+
+    prompt_details = usage.get('prompt_tokens_details')
+    input_details = usage.get('input_tokens_details')
+
+    cache_read_tokens = _safe_int(usage.get('cache_read_input_tokens', 0))
+    cache_write_tokens = _safe_int(usage.get('cache_creation_input_tokens', 0))
+
+    if isinstance(prompt_details, dict):
+        cache_read_tokens = max(cache_read_tokens, _safe_int(prompt_details.get('cached_tokens', 0)))
+    if isinstance(input_details, dict):
+        cache_read_tokens = max(cache_read_tokens, _safe_int(input_details.get('cached_tokens', 0)))
+
     return {
         'input_tokens': input_tokens,
         'output_tokens': output_tokens,
         'total_tokens': total_tokens,
+        'cache_read_tokens': cache_read_tokens,
+        'cache_write_tokens': cache_write_tokens,
     }
 
 
