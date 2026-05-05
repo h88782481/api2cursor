@@ -7,6 +7,7 @@ Anthropic Messages API 透传。当 Cursor 直接发送 Anthropic 格式请求�
 
 import json
 import logging
+from time import perf_counter
 
 import requests as req_lib
 from flask import Blueprint, request, jsonify
@@ -15,6 +16,7 @@ import settings
 from config import Config
 from routes.common import apply_body_modifications, apply_header_modifications, inject_instructions_anthropic
 from utils.http import build_anthropic_headers, forward_request, sse_response
+from utils.request_history import request_history
 from utils.request_logger import (
     append_client_event,
     append_upstream_event,
@@ -40,6 +42,7 @@ def messages_passthrough():
     model = payload.get('model', 'unknown')
     is_stream = payload.get('stream', False)
 
+    request_started_at = perf_counter()
     logger.info(f'[透传] model={model} 流式={is_stream}')
 
     mapping = settings.resolve_model(model)
@@ -78,7 +81,18 @@ def messages_passthrough():
         attach_upstream_response(turn, data)
         _inject_thinking(data)
         attach_client_response(turn, data)
-        finalize_turn(turn)
+        duration_ms = int((perf_counter() - request_started_at) * 1000)
+        request_history.record(
+            route='messages',
+            client_model=model,
+            actual_model=model,
+            backend='anthropic',
+            upstream_url=url,
+            usage=data.get('usage'),
+            duration_ms=duration_ms,
+            started_at=(turn or {}).get('started_at'),
+        )
+        finalize_turn(turn, usage=data.get('usage'), duration_ms=duration_ms)
         return jsonify(data)
 
     def generate():
@@ -108,7 +122,18 @@ def messages_passthrough():
                 'type': 'messages.stream.summary',
                 'event_count': len(client_events),
             })
-            finalize_turn(turn)
+            duration_ms = int((perf_counter() - request_started_at) * 1000)
+            request_history.record(
+                route='messages',
+                client_model=model,
+                actual_model=model,
+                backend='anthropic',
+                upstream_url=url,
+                usage=None,
+                duration_ms=duration_ms,
+                started_at=(turn or {}).get('started_at'),
+            )
+            finalize_turn(turn, duration_ms=duration_ms)
         except req_lib.RequestException as e:
             logger.error(f'请求上游失败: {e}')
             attach_error(turn, {'stage': 'request_exception', 'message': str(e)})

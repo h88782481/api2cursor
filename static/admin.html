@@ -90,6 +90,16 @@
       </div>
       <div id="statsContent"><div class="empty">加载中…</div></div>
     </div>
+
+    <!-- 请求日志 -->
+    <div class="card">
+      <div class="card-header">
+        <h2>最近 500 条请求日志</h2>
+        <button class="btn btn-ghost btn-sm" onclick="loadRequestLogs()">刷新</button>
+      </div>
+      <div class="hint" style="margin-top:-12px;margin-bottom:16px">显示请求时间、请求模型、实际上游模型、上游 URL、Token 统计、耗时和状态。</div>
+      <div id="requestLogsContent"><div class="empty">加载中…</div></div>
+    </div>
   </main>
 </div>
 

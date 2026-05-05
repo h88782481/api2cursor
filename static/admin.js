@@ -72,6 +72,7 @@ async function loadDashboard() {
     await loadMappings();
     checkHealth();
     loadStats();
+    loadRequestLogs();
   } catch (e) {
     toast('加载设置失败: ' + e.message, false);
   }
@@ -102,6 +103,55 @@ async function loadStats() {
   } catch (e) {
     el.innerHTML = '<div class="empty">加载统计失败</div>';
   }
+}
+
+async function loadRequestLogs() {
+  const el = document.getElementById('requestLogsContent');
+  try {
+    const data = await api('/api/admin/request-logs');
+    const items = data.items || [];
+    if (!items.length) {
+      el.innerHTML = '<div class="empty">暂无请求日志</div>';
+      return;
+    }
+    let html = '<div class="request-logs-wrap"><table class="stats-table request-logs-table"><thead><tr><th>请求时间</th><th>请求模型</th><th>实际模型</th><th>上游 URL</th><th>Tokens</th><th>耗时</th><th>状态</th></tr></thead><tbody>';
+    for (const item of items) {
+      const usage = item.usage || {};
+      const tokens = '输 ' + fmtNum(usage.input_tokens) + ' / 出 ' + fmtNum(usage.output_tokens) + ' / 总 ' + fmtNum(usage.total_tokens);
+      const statusClass = item.status === 'ok' ? 'status-ok' : 'status-error';
+      const statusText = item.status === 'ok' ? '成功' : '异常';
+      html += '<tr>'
+        + '<td>' + esc(fmtTime(item.requested_at)) + '</td>'
+        + '<td>' + esc(item.requested_model || '-') + '</td>'
+        + '<td>' + esc(item.actual_model || '-') + '</td>'
+        + '<td class="log-url" title="' + esc(item.upstream_url || '') + '">' + esc(item.upstream_url || '-') + '</td>'
+        + '<td>' + esc(tokens) + '</td>'
+        + '<td>' + fmtNum(item.duration_ms) + ' ms</td>'
+        + '<td><span class="log-status ' + statusClass + '">' + statusText + '</span></td>'
+        + '</tr>';
+    }
+    html += '</tbody></table></div>';
+    el.innerHTML = html;
+  } catch (e) {
+    el.innerHTML = '<div class="empty">加载请求日志失败</div>';
+  }
+}
+
+function fmtNum(value) {
+  return Number(value || 0).toLocaleString();
+}
+
+function fmtTime(value) {
+  if (!value) return '-';
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return String(value);
+  const pad = n => String(n).padStart(2, '0');
+  return d.getFullYear() + '-'
+    + pad(d.getMonth() + 1) + '-'
+    + pad(d.getDate()) + ' '
+    + pad(d.getHours()) + ':'
+    + pad(d.getMinutes()) + ':'
+    + pad(d.getSeconds());
 }
 
 async function checkHealth() {

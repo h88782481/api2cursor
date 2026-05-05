@@ -13,6 +13,7 @@ from flask import Blueprint, request, jsonify, send_from_directory
 
 import settings
 from config import Config
+from utils.request_history import request_history
 
 logger = logging.getLogger(__name__)
 
@@ -200,6 +201,15 @@ def get_stats():
         return err
     from utils.usage_tracker import usage_tracker
     return jsonify(usage_tracker.get_stats())
+
+
+@bp.route('/api/admin/request-logs', methods=['GET'])
+def get_request_logs():
+    """返回最近 500 条请求日志。"""
+    err = _check_auth()
+    if err:
+        return err
+    return jsonify({'items': request_history.get_recent(500)})
 
 
 # ─── 内部辅助 ─────────────────────────────────────
