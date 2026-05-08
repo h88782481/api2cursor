@@ -212,6 +212,44 @@ def get_request_logs():
     return jsonify({'items': request_history.get_recent(500)})
 
 
+# ─── 实时日志 ─────────────────────────────────────
+
+
+@bp.route('/api/admin/stream-logs', methods=['GET'])
+def stream_logs():
+    """通过 SSE (Server-Sent Events) 机制向前端实时推送控制台日志流。"""
+    # 身份校验：优先支持在 URL 参数中直接携带密钥（EventSource 接口限制）
+    token = request.args.get('key', '')
+    if Config.ACCESS_API_KEY and token != Config.ACCESS_API_KEY:
+        # 如果参数校验失败，则回退到检查标准的请求头鉴权
+        err = _check_auth()
+        if err:
+            return err
+
+    from utils.log_streamer import stream_handler
+    from flask import Response
+
+    def generate():
+        # 获取一个新的日志队列实例
+        q = stream_handler.add_listener()
+        try:
+            while True:
+                # 阻塞式等待新日志消息
+                msg = q.get()
+                # 预处理日志中的换行符，防止破坏 SSE 传输协议格式
+                msg = msg.replace('\n', '\n    ')
+                # 按照 SSE 规范封装数据帧
+                yield f"data: {msg}\n\n"
+        except GeneratorExit:
+            # 客户端连接关闭（如刷新页面或停止连接）
+            pass
+        finally:
+            # 无论何种情况，确保注销监听器以释放内存
+            stream_handler.remove_listener(q)
+
+    return Response(generate(), mimetype='text/event-stream')
+
+
 # ─── 内部辅助 ─────────────────────────────────────
 
 

@@ -91,6 +91,20 @@
       <div id="statsContent"><div class="empty">加载中…</div></div>
     </div>
 
+    <!-- 实时日志 -->
+    <div class="card" id="realtimeLogsCard">
+      <div class="card-header">
+        <h2>实时控制台日志</h2>
+        <div>
+          <button class="btn btn-ghost btn-sm" id="btnToggleLog" onclick="toggleRealtimeLog()">显示实时日志</button>
+          <button class="btn btn-ghost btn-sm" id="btnClearLog" onclick="clearRealtimeLog()" style="display:none;">清空</button>
+        </div>
+      </div>
+      <div class="log-console-container" id="logConsoleContainer" style="display:none;">
+        <div id="realtimeLogContent" class="log-console"></div>
+      </div>
+    </div>
+
     <!-- 请求日志 -->
     <div class="card">
       <div class="card-header">

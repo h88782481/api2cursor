@@ -372,3 +372,74 @@ document.getElementById('modal').addEventListener('click', function(e) {
 document.addEventListener('keydown', function(e) {
   if (e.key === 'Escape') closeModal();
 });
+
+// ─── 实时日志 ───────────────────────────────────────
+let logEventSource = null;
+let isRealtimeLogActive = false;
+
+function toggleRealtimeLog() {
+  const container = document.getElementById('logConsoleContainer');
+  const btn = document.getElementById('btnToggleLog');
+  const btnClear = document.getElementById('btnClearLog');
+  const content = document.getElementById('realtimeLogContent');
+
+  if (isRealtimeLogActive) {
+    // 停止
+    if (logEventSource) {
+      logEventSource.close();
+      logEventSource = null;
+    }
+    isRealtimeLogActive = false;
+    btn.textContent = '显示实时日志';
+    btn.classList.remove('btn-red');
+    container.style.display = 'none';
+    btnClear.style.display = 'none';
+  } else {
+    // 开启
+    isRealtimeLogActive = true;
+    btn.textContent = '停止实时日志';
+    btn.classList.add('btn-red');
+    container.style.display = 'block';
+    btnClear.style.display = 'inline-flex';
+    
+    // 连接 SSE
+    let url = API + '/api/admin/stream-logs';
+    if (authKey) {
+      url += '?key=' + encodeURIComponent(authKey);
+    }
+    logEventSource = new EventSource(url);
+    
+    logEventSource.onmessage = function(e) {
+      const el = document.createElement('div');
+      el.className = 'log-line';
+      el.textContent = e.data;
+      content.appendChild(el);
+      
+      // 控制在 1000 行以内，防止内存溢出
+      if (content.childNodes.length > 1000) {
+        content.removeChild(content.firstChild);
+      }
+      
+      // 自动滚动到底部
+      content.scrollTop = content.scrollHeight;
+    };
+    
+    logEventSource.onerror = function() {
+      const el = document.createElement('div');
+      el.className = 'log-line';
+      el.style.color = 'var(--red)';
+      el.textContent = '[系统] 与日志流的连接中断或发生错误。';
+      content.appendChild(el);
+      content.scrollTop = content.scrollHeight;
+      
+      logEventSource.close();
+      isRealtimeLogActive = false;
+      btn.textContent = '重新连接日志';
+      btn.classList.remove('btn-red');
+    };
+  }
+}
+
+function clearRealtimeLog() {
+  document.getElementById('realtimeLogContent').innerHTML = '';
+}

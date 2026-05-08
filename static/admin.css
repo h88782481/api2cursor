@@ -91,3 +91,8 @@ main{padding:28px 0 60px}
 .log-status{display:inline-flex;align-items:center;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600}
 .status-ok{background:rgba(34,197,94,.15);color:var(--green)}
 .status-error{background:rgba(239,68,68,.15);color:var(--red)}
+
+.log-console-container{margin-top:16px;border-radius:8px;overflow:hidden;border:1px solid var(--border)}
+.log-console{background:#0d1117;color:#c9d1d9;font-family:Consolas,Monaco,monospace;font-size:13px;padding:16px;height:400px;overflow-y:auto;white-space:pre-wrap;word-break:break-all}
+.log-console .log-line{margin-bottom:4px;line-height:1.4}
+.log-console .log-line:last-child{margin-bottom:0}
