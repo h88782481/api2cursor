@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+from time import perf_counter
 from typing import Any
 
 import settings
@@ -59,6 +60,7 @@ from utils.http import (
     iter_responses_sse,
     sse_response,
 )
+from utils.request_history import request_history
 from utils.request_logger import (
     append_client_event,
     append_upstream_event,
@@ -113,6 +115,7 @@ def chat_completions():
     client_model = payload.get('model', 'unknown')
     is_stream = payload.get('stream', False)
     ctx = build_route_context(client_model, is_stream)
+    request_started_at = perf_counter()
     turn = start_turn(
         route='chat',
         client_model=client_model,
@@ -132,12 +135,12 @@ def chat_completions():
         payload['messages'] = thinking_cache.inject(payload.get('messages', []))
 
     if ctx.backend == 'openai':
-        return _handle_openai_backend(ctx, payload, turn)
+        return _handle_openai_backend(ctx, payload, turn, request_started_at)
     if ctx.backend == 'responses':
-        return _handle_responses_backend(ctx, payload, turn)
+        return _handle_responses_backend(ctx, payload, turn, request_started_at)
     if ctx.backend == 'gemini':
-        return _handle_gemini_backend(ctx, payload, turn)
-    return _handle_anthropic_backend(ctx, payload, turn)
+        return _handle_gemini_backend(ctx, payload, turn, request_started_at)
+    return _handle_anthropic_backend(ctx, payload, turn, request_started_at)
 
 
 def _normalize_chat_payload(payload: dict[str, Any]) -> tuple[dict[str, Any], int]:
@@ -158,7 +161,12 @@ def _normalize_chat_payload(payload: dict[str, Any]) -> tuple[dict[str, Any], in
     return payload, message_count
 
 
-def _handle_openai_backend(ctx: RouteContext, payload: dict[str, Any], turn: dict[str, Any]):
+def _handle_openai_backend(
+    ctx: RouteContext,
+    payload: dict[str, Any],
+    turn: dict[str, Any],
+    request_started_at: float,
+):
     """处理走 OpenAI 兼容后端的聊天补全请求。"""
     _dbg(
         '原始请求字段=' + str(list(payload.keys())) + ' '
@@ -182,8 +190,8 @@ def _handle_openai_backend(ctx: RouteContext, payload: dict[str, Any], turn: dic
     headers = apply_header_modifications(headers, ctx.header_modifications)
 
     if ctx.is_stream:
-        return _handle_openai_stream(ctx, payload, url, headers, turn)
-    return _handle_openai_non_stream(ctx, payload, url, headers, turn)
+        return _handle_openai_stream(ctx, payload, url, headers, turn, request_started_at)
+    return _handle_openai_non_stream(ctx, payload, url, headers, turn, request_started_at)
 
 
 def _handle_openai_non_stream(
@@ -192,6 +200,7 @@ def _handle_openai_non_stream(
     url: str,
     headers: dict[str, str],
     turn: dict[str, Any],
+    request_started_at: float,
 ):
     """处理 OpenAI 兼容后端的非流式返回。"""
     payload['stream'] = False
@@ -207,7 +216,14 @@ def _handle_openai_non_stream(
     _dbg('上游原始响应=' + json.dumps(raw, ensure_ascii=False, default=str)[:1000])
 
     data = fix_response(raw)
-    return _finalize_chat_response(ctx, data, turn=turn, debug_label='修复后响应')
+    return _finalize_chat_response(
+        ctx,
+        data,
+        turn=turn,
+        debug_label='修复后响应',
+        request_started_at=request_started_at,
+        upstream_url=url,
+    )
 
 
 def _handle_openai_stream(
@@ -216,6 +232,7 @@ def _handle_openai_stream(
     url: str,
     headers: dict[str, str],
     turn: dict[str, Any],
+    request_started_at: float,
 ):
     """处理 OpenAI 兼容后端的流式返回。"""
     payload['stream'] = True
@@ -258,7 +275,18 @@ def _handle_openai_stream(
                     'chunk_count': len(client_chunks),
                     'usage': last_usage,
                 })
-                finalize_turn(turn, usage=last_usage)
+                duration_ms = int((perf_counter() - request_started_at) * 1000)
+                request_history.record(
+                    route='chat',
+                    client_model=ctx.client_model,
+                    actual_model=ctx.upstream_model,
+                    backend=ctx.backend,
+                    upstream_url=url,
+                    usage=last_usage,
+                    duration_ms=duration_ms,
+                    started_at=(turn or {}).get('started_at'),
+                )
+                finalize_turn(turn, usage=last_usage, duration_ms=duration_ms)
                 return
 
             append_upstream_event(turn, {'type': 'openai_chunk', 'data': chunk})
@@ -299,12 +327,28 @@ def _handle_openai_stream(
             'chunk_count': len(client_chunks),
             'usage': last_usage,
         })
-        finalize_turn(turn, usage=last_usage)
+        duration_ms = int((perf_counter() - request_started_at) * 1000)
+        request_history.record(
+            route='chat',
+            client_model=ctx.client_model,
+            actual_model=ctx.upstream_model,
+            backend=ctx.backend,
+            upstream_url=url,
+            usage=last_usage,
+            duration_ms=duration_ms,
+            started_at=(turn or {}).get('started_at'),
+        )
+        finalize_turn(turn, usage=last_usage, duration_ms=duration_ms)
 
     return sse_response(generate())
 
 
-def _handle_responses_backend(ctx: RouteContext, payload: dict[str, Any], turn: dict[str, Any] | None):
+def _handle_responses_backend(
+    ctx: RouteContext,
+    payload: dict[str, Any],
+    turn: dict[str, Any] | None,
+    request_started_at: float,
+):
     """处理走原生 Responses 后端的聊天补全请求。
 
     当上游只支持 `/v1/responses` 时，需要先把聊天补全请求转换为 Responses 请求，
@@ -324,8 +368,8 @@ def _handle_responses_backend(ctx: RouteContext, payload: dict[str, Any], turn: 
     headers = apply_header_modifications(headers, ctx.header_modifications)
 
     if ctx.is_stream:
-        return _handle_responses_stream(ctx, responses_payload, url, headers, turn)
-    return _handle_responses_non_stream(ctx, responses_payload, url, headers, turn)
+        return _handle_responses_stream(ctx, responses_payload, url, headers, turn, request_started_at)
+    return _handle_responses_non_stream(ctx, responses_payload, url, headers, turn, request_started_at)
 
 
 def _handle_responses_non_stream(
@@ -334,6 +378,7 @@ def _handle_responses_non_stream(
     url: str,
     headers: dict[str, str],
     turn: dict[str, Any] | None,
+    request_started_at: float,
 ):
     """处理原生 Responses 后端的非流式返回。"""
     payload['stream'] = False
@@ -349,7 +394,14 @@ def _handle_responses_non_stream(
     _dbg('上游原始响应=' + json.dumps(raw, ensure_ascii=False, default=str)[:1000])
 
     data = responses_to_cc_response(raw, ctx.client_model)
-    return _finalize_chat_response(ctx, data, turn=turn, debug_label='Responses 转回聊天补全后')
+    return _finalize_chat_response(
+        ctx,
+        data,
+        turn=turn,
+        debug_label='Responses 转回聊天补全后',
+        request_started_at=request_started_at,
+        upstream_url=url,
+    )
 
 
 def _handle_responses_stream(
@@ -358,6 +410,7 @@ def _handle_responses_stream(
     url: str,
     headers: dict[str, str],
     turn: dict[str, Any] | None,
+    request_started_at: float,
 ):
     """处理原生 Responses 后端的流式返回。"""
     payload['stream'] = True
@@ -421,12 +474,28 @@ def _handle_responses_stream(
             'chunk_count': len(client_chunks),
             'usage': last_usage,
         })
-        finalize_turn(turn, usage=last_usage)
+        duration_ms = int((perf_counter() - request_started_at) * 1000)
+        request_history.record(
+            route='chat',
+            client_model=ctx.client_model,
+            actual_model=ctx.upstream_model,
+            backend=ctx.backend,
+            upstream_url=url,
+            usage=last_usage,
+            duration_ms=duration_ms,
+            started_at=(turn or {}).get('started_at'),
+        )
+        finalize_turn(turn, usage=last_usage, duration_ms=duration_ms)
 
     return sse_response(generate())
 
 
-def _handle_gemini_backend(ctx: RouteContext, payload: dict[str, Any], turn: dict[str, Any] | None):
+def _handle_gemini_backend(
+    ctx: RouteContext,
+    payload: dict[str, Any],
+    turn: dict[str, Any] | None,
+    request_started_at: float,
+):
     """处理走 Gemini Contents 后端的聊天补全请求。"""
     payload = inject_instructions_cc(payload, ctx.custom_instructions, ctx.instructions_position)
     gemini_payload = cc_to_gemini_request(payload)
@@ -440,8 +509,8 @@ def _handle_gemini_backend(ctx: RouteContext, payload: dict[str, Any], turn: dic
     headers = apply_header_modifications(headers, ctx.header_modifications)
 
     if ctx.is_stream:
-        return _handle_gemini_stream(ctx, gemini_payload, url, headers, turn)
-    return _handle_gemini_non_stream(ctx, gemini_payload, url, headers, turn)
+        return _handle_gemini_stream(ctx, gemini_payload, url, headers, turn, request_started_at)
+    return _handle_gemini_non_stream(ctx, gemini_payload, url, headers, turn, request_started_at)
 
 
 def _handle_gemini_non_stream(
@@ -450,6 +519,7 @@ def _handle_gemini_non_stream(
     url: str,
     headers: dict[str, str],
     turn: dict[str, Any] | None,
+    request_started_at: float,
 ):
     """处理 Gemini 后端的非流式返回。"""
     attach_upstream_request(turn, payload, headers)
@@ -464,7 +534,14 @@ def _handle_gemini_non_stream(
     _dbg('上游原始响应=' + json.dumps(raw, ensure_ascii=False, default=str)[:1000])
 
     data = gemini_to_cc_response(raw)
-    return _finalize_chat_response(ctx, data, turn=turn, debug_label='Gemini 转回聊天补全后')
+    return _finalize_chat_response(
+        ctx,
+        data,
+        turn=turn,
+        debug_label='Gemini 转回聊天补全后',
+        request_started_at=request_started_at,
+        upstream_url=url,
+    )
 
 
 def _handle_gemini_stream(
@@ -473,6 +550,7 @@ def _handle_gemini_stream(
     url: str,
     headers: dict[str, str],
     turn: dict[str, Any] | None,
+    request_started_at: float,
 ):
     """处理 Gemini 后端的流式返回。"""
     converter = GeminiStreamConverter()
@@ -535,12 +613,28 @@ def _handle_gemini_stream(
             'chunk_count': len(client_chunks),
             'usage': last_usage,
         })
-        finalize_turn(turn, usage=last_usage)
+        duration_ms = int((perf_counter() - request_started_at) * 1000)
+        request_history.record(
+            route='chat',
+            client_model=ctx.client_model,
+            actual_model=ctx.upstream_model,
+            backend=ctx.backend,
+            upstream_url=url,
+            usage=last_usage,
+            duration_ms=duration_ms,
+            started_at=(turn or {}).get('started_at'),
+        )
+        finalize_turn(turn, usage=last_usage, duration_ms=duration_ms)
 
     return sse_response(generate())
 
 
-def _handle_anthropic_backend(ctx: RouteContext, payload: dict[str, Any], turn: dict[str, Any] | None):
+def _handle_anthropic_backend(
+    ctx: RouteContext,
+    payload: dict[str, Any],
+    turn: dict[str, Any] | None,
+    request_started_at: float,
+):
     """处理走 Anthropic Messages 后端的聊天补全请求。"""
     payload['model'] = ctx.upstream_model
     anthropic_payload = cc_to_messages_request(payload)
@@ -555,8 +649,8 @@ def _handle_anthropic_backend(ctx: RouteContext, payload: dict[str, Any], turn: 
     headers = apply_header_modifications(headers, ctx.header_modifications)
 
     if ctx.is_stream:
-        return _handle_anthropic_stream(ctx, anthropic_payload, url, headers, turn)
-    return _handle_anthropic_non_stream(ctx, anthropic_payload, url, headers, turn)
+        return _handle_anthropic_stream(ctx, anthropic_payload, url, headers, turn, request_started_at)
+    return _handle_anthropic_non_stream(ctx, anthropic_payload, url, headers, turn, request_started_at)
 
 
 def _handle_anthropic_non_stream(
@@ -565,6 +659,7 @@ def _handle_anthropic_non_stream(
     url: str,
     headers: dict[str, str],
     turn: dict[str, Any] | None,
+    request_started_at: float,
 ):
     """处理 Anthropic 后端的非流式返回。"""
     payload['stream'] = False
@@ -580,7 +675,14 @@ def _handle_anthropic_non_stream(
     _dbg('上游原始响应=' + json.dumps(raw, ensure_ascii=False, default=str)[:1000])
 
     data = messages_to_cc_response(raw)
-    return _finalize_chat_response(ctx, data, turn=turn, debug_label='Messages 转回聊天补全后')
+    return _finalize_chat_response(
+        ctx,
+        data,
+        turn=turn,
+        debug_label='Messages 转回聊天补全后',
+        request_started_at=request_started_at,
+        upstream_url=url,
+    )
 
 
 def _handle_anthropic_stream(
@@ -589,6 +691,7 @@ def _handle_anthropic_stream(
     url: str,
     headers: dict[str, str],
     turn: dict[str, Any] | None,
+    request_started_at: float,
 ):
     """处理 Anthropic 后端的流式返回。
 
@@ -673,7 +776,18 @@ def _handle_anthropic_stream(
             'chunk_count': len(client_chunks),
             'usage': last_usage,
         })
-        finalize_turn(turn, usage=last_usage)
+        duration_ms = int((perf_counter() - request_started_at) * 1000)
+        request_history.record(
+            route='chat',
+            client_model=ctx.client_model,
+            actual_model=ctx.upstream_model,
+            backend=ctx.backend,
+            upstream_url=url,
+            usage=last_usage,
+            duration_ms=duration_ms,
+            started_at=(turn or {}).get('started_at'),
+        )
+        finalize_turn(turn, usage=last_usage, duration_ms=duration_ms)
 
     return sse_response(generate())
 
@@ -684,6 +798,8 @@ def _finalize_chat_response(
     *,
     turn: dict[str, Any] | None,
     debug_label: str,
+    request_started_at: float,
+    upstream_url: str,
 ):
     """统一收尾非流式聊天补全响应。
 
@@ -696,9 +812,21 @@ def _finalize_chat_response(
     _dbg(debug_label + '=' + json.dumps(data, ensure_ascii=False, default=str)[:1000])
     log_usage('聊天补全', data.get('usage', {}), input_key='prompt_tokens', output_key='completion_tokens')
 
-    usage_tracker.record(ctx.client_model, data.get('usage'))
+    usage = data.get('usage')
+    duration_ms = int((perf_counter() - request_started_at) * 1000)
+    usage_tracker.record(ctx.client_model, usage)
+    request_history.record(
+        route='chat',
+        client_model=ctx.client_model,
+        actual_model=ctx.upstream_model,
+        backend=ctx.backend,
+        upstream_url=upstream_url,
+        usage=usage,
+        duration_ms=duration_ms,
+        started_at=(turn or {}).get('started_at'),
+    )
     attach_client_response(turn, data)
-    finalize_turn(turn, usage=data.get('usage'))
+    finalize_turn(turn, usage=usage, duration_ms=duration_ms)
 
     for choice in data.get('choices', []):
         msg = choice.get('message', {})

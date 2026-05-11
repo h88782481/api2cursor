@@ -159,6 +159,18 @@ api2cursor/
 - `file_path` → `path` 字段映射
 - `finish_reason` 修正
 
+
+============================
+增加缓存，在api2cursor里面的body修改中加个你喜欢的随意字段：
+{
+    "prompt_cache_key": "GPT5-4-xxx-xxx"
+}
+openai 开 fast 模式
+{
+  "service_tier": "priority"
+}
+
+
 ## 许可证
 
 [MIT](LICENSE)

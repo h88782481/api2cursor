@@ -14,6 +14,9 @@ logging.basicConfig(
     format='%(asctime)s [%(name)s] %(levelname)s: %(message)s',
 )
 
+from utils.log_streamer import stream_handler
+logging.getLogger().addHandler(stream_handler)
+
 from config import Config
 from app import create_app
 

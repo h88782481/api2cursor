@@ -582,16 +582,39 @@ _EPHEMERAL = {'type': 'ephemeral'}
 
 
 def optimize_cache_control(request: JsonDict) -> None:
-    """为 Anthropic Messages 请求启用顶层自动 prompt caching。
+    """为 Anthropic Messages 请求启用块级别的 prompt caching。
 
-    2026 版 Claude API 已支持在请求顶层使用 `cache_control` 开启自动缓存，
-    由上游自动把断点放到最后一个可缓存块并随多轮对话前移。相比手动在嵌套
-    content blocks 上打断点，这种方式对 Anthropic 兼容中转站更稳定，也更接近
-    `/v1/responses` 通过顶层字段启用缓存的思路。
+    遵循 Anthropic 官方规范，最多允许 4 个内容块携带 `cache_control` 标记。
+    我们会优先为 system 和 tools 的尾部内容块添加缓存断点，
+    然后将剩余的名额按窗口距离分配给 messages 中的内容块。
     """
     _normalize_message_contents(request)
     _clear_all_cache_controls(request)
-    request['cache_control'] = dict(_EPHEMERAL)
+
+    breakpoints_left = _MAX_BREAKPOINTS
+
+    # 优先在结构化数据（tools 和 system）尾部打断点
+    breakpoints_left -= _inject_structural_anchors(request)
+
+    # 收集 messages 中可用的文本块
+    refs = _collect_cacheable_block_refs(request)
+    if not refs or breakpoints_left <= 0:
+        return
+
+    # 给最后一个消息块打断点（确保最新的对话能被缓存）
+    refs[-1]['cache_control'] = dict(_EPHEMERAL)
+    breakpoints_left -= 1
+
+    # 如果还有名额，按窗口距离往前回溯打断点
+    target = len(refs) - 1 - _BLOCK_WINDOW
+    while breakpoints_left > 0 and target >= 0:
+        anchor = _pick_window_anchor(refs, target)
+        if anchor is not None:
+            refs[anchor]['cache_control'] = dict(_EPHEMERAL)
+            breakpoints_left -= 1
+            target = anchor - _BLOCK_WINDOW
+        else:
+            break
 
 
 def _normalize_message_contents(request: JsonDict) -> None:

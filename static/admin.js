@@ -72,6 +72,7 @@ async function loadDashboard() {
     await loadMappings();
     checkHealth();
     loadStats();
+    loadRequestLogs();
   } catch (e) {
     toast('加载设置失败: ' + e.message, false);
   }
@@ -102,6 +103,58 @@ async function loadStats() {
   } catch (e) {
     el.innerHTML = '<div class="empty">加载统计失败</div>';
   }
+}
+
+async function loadRequestLogs() {
+  const el = document.getElementById('requestLogsContent');
+  try {
+    const data = await api('/api/admin/request-logs');
+    const items = data.items || [];
+    if (!items.length) {
+      el.innerHTML = '<div class="empty">暂无请求日志</div>';
+      return;
+    }
+    let html = '<div class="request-logs-wrap"><table class="stats-table request-logs-table"><thead><tr><th>请求时间</th><th>请求模型</th><th>实际模型</th><th>上游 URL</th><th>Tokens</th><th>耗时</th><th>状态</th></tr></thead><tbody>';
+    for (const item of items) {
+      const usage = item.usage || {};
+      let tokens = '输 ' + fmtNum(usage.input_tokens) + ' / 出 ' + fmtNum(usage.output_tokens) + ' / 总 ' + fmtNum(usage.total_tokens);
+      if (Number(usage.cache_read_tokens || 0) > 0 || Number(usage.cache_write_tokens || 0) > 0) {
+        tokens += ' / 缓存读 ' + fmtNum(usage.cache_read_tokens) + ' / 缓存写 ' + fmtNum(usage.cache_write_tokens);
+      }
+      const statusClass = item.status === 'ok' ? 'status-ok' : 'status-error';
+      const statusText = item.status === 'ok' ? '成功' : '异常';
+      html += '<tr>'
+        + '<td>' + esc(fmtTime(item.requested_at)) + '</td>'
+        + '<td>' + esc(item.requested_model || '-') + '</td>'
+        + '<td>' + esc(item.actual_model || '-') + '</td>'
+        + '<td class="log-url" title="' + esc(item.upstream_url || '') + '">' + esc(item.upstream_url || '-') + '</td>'
+        + '<td>' + esc(tokens) + '</td>'
+        + '<td>' + fmtNum(item.duration_ms) + ' ms</td>'
+        + '<td><span class="log-status ' + statusClass + '">' + statusText + '</span></td>'
+        + '</tr>';
+    }
+    html += '</tbody></table></div>';
+    el.innerHTML = html;
+  } catch (e) {
+    el.innerHTML = '<div class="empty">加载请求日志失败</div>';
+  }
+}
+
+function fmtNum(value) {
+  return Number(value || 0).toLocaleString();
+}
+
+function fmtTime(value) {
+  if (!value) return '-';
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return String(value);
+  const pad = n => String(n).padStart(2, '0');
+  return d.getFullYear() + '-'
+    + pad(d.getMonth() + 1) + '-'
+    + pad(d.getDate()) + ' '
+    + pad(d.getHours()) + ':'
+    + pad(d.getMinutes()) + ':'
+    + pad(d.getSeconds());
 }
 
 async function checkHealth() {
@@ -319,3 +372,74 @@ document.getElementById('modal').addEventListener('click', function(e) {
 document.addEventListener('keydown', function(e) {
   if (e.key === 'Escape') closeModal();
 });
+
+// ─── 实时日志 ───────────────────────────────────────
+let logEventSource = null;
+let isRealtimeLogActive = false;
+
+function toggleRealtimeLog() {
+  const container = document.getElementById('logConsoleContainer');
+  const btn = document.getElementById('btnToggleLog');
+  const btnClear = document.getElementById('btnClearLog');
+  const content = document.getElementById('realtimeLogContent');
+
+  if (isRealtimeLogActive) {
+    // 停止
+    if (logEventSource) {
+      logEventSource.close();
+      logEventSource = null;
+    }
+    isRealtimeLogActive = false;
+    btn.textContent = '显示实时日志';
+    btn.classList.remove('btn-red');
+    container.style.display = 'none';
+    btnClear.style.display = 'none';
+  } else {
+    // 开启
+    isRealtimeLogActive = true;
+    btn.textContent = '停止实时日志';
+    btn.classList.add('btn-red');
+    container.style.display = 'block';
+    btnClear.style.display = 'inline-flex';
+    
+    // 连接 SSE
+    let url = API + '/api/admin/stream-logs';
+    if (authKey) {
+      url += '?key=' + encodeURIComponent(authKey);
+    }
+    logEventSource = new EventSource(url);
+    
+    logEventSource.onmessage = function(e) {
+      const el = document.createElement('div');
+      el.className = 'log-line';
+      el.textContent = e.data;
+      content.appendChild(el);
+      
+      // 控制在 1000 行以内，防止内存溢出
+      if (content.childNodes.length > 1000) {
+        content.removeChild(content.firstChild);
+      }
+      
+      // 自动滚动到底部
+      content.scrollTop = content.scrollHeight;
+    };
+    
+    logEventSource.onerror = function() {
+      const el = document.createElement('div');
+      el.className = 'log-line';
+      el.style.color = 'var(--red)';
+      el.textContent = '[系统] 与日志流的连接中断或发生错误。';
+      content.appendChild(el);
+      content.scrollTop = content.scrollHeight;
+      
+      logEventSource.close();
+      isRealtimeLogActive = false;
+      btn.textContent = '重新连接日志';
+      btn.classList.remove('btn-red');
+    };
+  }
+}
+
+function clearRealtimeLog() {
+  document.getElementById('realtimeLogContent').innerHTML = '';
+}

@@ -9,7 +9,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Micr
 input,select,button,textarea{font-family:inherit;font-size:inherit}
 a{color:var(--primary);text-decoration:none}
 code{background:var(--input);padding:1px 5px;border-radius:4px;font-size:12px;font-family:Consolas,Monaco,monospace}
-.container{max-width:960px;margin:0 auto;padding:0 20px}
+.container{width:min(100%,1680px);margin:0 auto;padding:0 20px}
 
 #login{display:flex;align-items:center;justify-content:center;min-height:100vh;background:linear-gradient(145deg,#0b1120 0%,#121a2e 50%,#0b1120 100%)}
 .login-card{background:var(--card);border:1px solid var(--border);border-radius:16px;padding:40px;width:380px;box-shadow:0 20px 60px rgba(0,0,0,.4)}
@@ -83,3 +83,16 @@ main{padding:28px 0 60px}
 .toast-ok{background:#065f46;color:#a7f3d0}
 .toast-err{background:#7f1d1d;color:#fca5a5}
 @keyframes slideIn{from{transform:translateX(100px);opacity:0}to{transform:none;opacity:1}}
+
+.request-logs-wrap{overflow:auto}
+.request-logs-table{min-width:1100px}
+.request-logs-table td{vertical-align:top}
+.log-url{max-width:320px;word-break:break-all;color:var(--muted)}
+.log-status{display:inline-flex;align-items:center;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600}
+.status-ok{background:rgba(34,197,94,.15);color:var(--green)}
+.status-error{background:rgba(239,68,68,.15);color:var(--red)}
+
+.log-console-container{margin-top:16px;border-radius:8px;overflow:hidden;border:1px solid var(--border)}
+.log-console{background:#0d1117;color:#c9d1d9;font-family:Consolas,Monaco,monospace;font-size:13px;padding:16px;height:400px;overflow-y:auto;white-space:pre-wrap;word-break:break-all}
+.log-console .log-line{margin-bottom:4px;line-height:1.4}
+.log-console .log-line:last-child{margin-bottom:0}
