@@ -130,7 +130,7 @@ app/
 - 旧版 `function_call` → `tool_calls`；流式 tool_calls 空白 id/name 清理与元数据补全
 - StrReplace 智能引号容错修复、`file_path` → `path`
 - 多轮对话 thinking 缓存回注（Cursor 不回传思考内容，推理模型缺失历史 thinking 时降质）
-- Anthropic 上游自动 `cache_control`（顶层自动提示缓存）；Responses 上游自动 `prompt_cache_key`
+- 提示缓存全链路：Anthropic 上游自动顶层 `cache_control`；Responses / Chat Completions 上游自动生成稳定的 `prompt_cache_key`（按模型+系统提示词哈希，跨轮一致；上游不支持时可用 body_modifications 设 `null` 删除）；缓存命中指标（`cached_tokens` / `cache_read_input_tokens`）在各协议间双向换算，Cursor 侧可见
 - Gemini 上游走 v1beta 端点（v1 不支持函数调用）；Gemini 3 强制回传的 `thoughtSignature` 按 tool_call_id 缓存并在多轮工具调用时重新附加，未命中时用官方哨兵值兜底
 - messages 透传时非标准 `reasoning_content` → 标准 thinking block（含流式 index 偏移）
 

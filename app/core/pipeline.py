@@ -32,6 +32,7 @@ from ..compat.thinking import (
 )
 from ..compat.tools import fix_tool_call_block
 from ..protocols import get_codec
+from ..protocols.anthropic import parse_messages_usage
 from ..protocols.base import parse_json, sse_data, sse_event
 from ..protocols.chat_completions import normalize_cc_request
 from ..protocols.responses_api import ensure_prompt_cache_key, parse_responses_usage
@@ -212,11 +213,7 @@ def _finalize_raw_response(
     """responses→responses / messages→messages 的非流式透传收尾。"""
     if decision.upstream_format == 'messages':
         inject_thinking_into_messages_response(data)
-        raw_usage = data.get('usage') or {}
-        usage = IRUsage(
-            input_tokens=raw_usage.get('input_tokens', 0) or 0,
-            output_tokens=raw_usage.get('output_tokens', 0) or 0,
-        )
+        usage = parse_messages_usage(data.get('usage'))
     else:
         usage = parse_responses_usage(data.get('usage'))
 
@@ -397,7 +394,8 @@ async def _raw_stream(
                             message_obj['model'] = decision.client_model
                         start_usage = message_obj.get('usage')
                         if isinstance(start_usage, dict):
-                            usage_input = start_usage.get('input_tokens', 0) or 0
+                            # 含 cache_read / cache_creation 的总输入口径
+                            usage_input = parse_messages_usage(start_usage).input_tokens
                             usage_seen = True
                     elif etype == 'message_delta' and isinstance(payload.get('usage'), dict):
                         usage_output = payload['usage'].get('output_tokens', 0) or 0

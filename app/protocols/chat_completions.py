@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import time
 from typing import Any
@@ -130,7 +131,6 @@ class ChatCompletionsCodec(Codec):
         if tool_calls:
             message['tool_calls'] = tool_calls
 
-        usage = response.usage
         return {
             'id': response.id or gen_id('chatcmpl-'),
             'object': 'chat.completion',
@@ -141,11 +141,7 @@ class ChatCompletionsCodec(Codec):
                 'message': message,
                 'finish_reason': response.finish_reason,
             }],
-            'usage': {
-                'prompt_tokens': usage.input_tokens,
-                'completion_tokens': usage.output_tokens,
-                'total_tokens': usage.total_tokens,
-            },
+            'usage': build_cc_usage(response.usage),
         }
 
     def stream_encoder(self, client_model: str) -> StreamEncoder:
@@ -204,6 +200,12 @@ class ChatCompletionsCodec(Codec):
             payload['top_p'] = request.top_p
         if request.stop:
             payload['stop'] = request.stop
+
+        # 与 Responses 上游一致：生成稳定的缓存路由键，提升中转站提示缓存命中率。
+        # 上游不支持时可通过映射的 body_modifications 设置 {"prompt_cache_key": null} 删除。
+        payload['prompt_cache_key'] = hashlib.sha256(
+            f'{upstream_model}|{request.system}'.encode()
+        ).hexdigest()[:32]
         return payload
 
     def parse_response(self, payload: dict[str, Any]) -> IRResponse:
@@ -466,11 +468,7 @@ class ChatStreamEncoder(StreamEncoder):
             'choices': [choice],
         }
         if usage is not None:
-            chunk['usage'] = {
-                'prompt_tokens': usage.input_tokens,
-                'completion_tokens': usage.output_tokens,
-                'total_tokens': usage.total_tokens,
-            }
+            chunk['usage'] = build_cc_usage(usage)
         return sse_data(chunk)
 
 
@@ -593,6 +591,17 @@ def _normalize_tool_definition(tool: Any) -> Any:
 # ═══════════════════════════════════════════════════════════
 #  内部辅助
 # ═══════════════════════════════════════════════════════════
+
+
+def build_cc_usage(usage: IRUsage) -> dict[str, Any]:
+    """构造 CC usage，携带缓存命中与推理 token 明细供 Cursor 展示。"""
+    return {
+        'prompt_tokens': usage.input_tokens,
+        'completion_tokens': usage.output_tokens,
+        'total_tokens': usage.total_tokens,
+        'prompt_tokens_details': {'cached_tokens': usage.cached_tokens},
+        'completion_tokens_details': {'reasoning_tokens': usage.reasoning_tokens},
+    }
 
 
 def parse_cc_usage(usage: Any) -> IRUsage:

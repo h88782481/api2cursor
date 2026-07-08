@@ -110,7 +110,6 @@ class AnthropicCodec(Codec):
                     'input': parse_arguments_dict(block.arguments),
                 })
 
-        usage = response.usage
         return {
             'id': response.id or gen_id('msg_'),
             'type': 'message',
@@ -119,10 +118,7 @@ class AnthropicCodec(Codec):
             'content': content,
             'stop_reason': _FINISH_TO_STOP.get(response.finish_reason, 'end_turn'),
             'stop_sequence': None,
-            'usage': {
-                'input_tokens': usage.input_tokens,
-                'output_tokens': usage.output_tokens,
-            },
+            'usage': build_messages_usage(response.usage),
         }
 
     def stream_encoder(self, client_model: str) -> StreamEncoder:
@@ -196,17 +192,12 @@ class AnthropicCodec(Codec):
                     arguments=dump_arguments(block.get('input', {})),
                 ))
 
-        usage = payload.get('usage') or {}
         return IRResponse(
             id=payload.get('id') or gen_id('msg_'),
             model=payload.get('model', ''),
             blocks=blocks,
             finish_reason=_STOP_TO_FINISH.get(payload.get('stop_reason', 'end_turn'), 'stop'),
-            usage=IRUsage(
-                input_tokens=usage.get('input_tokens', 0) or 0,
-                output_tokens=usage.get('output_tokens', 0) or 0,
-                cached_tokens=usage.get('cache_read_input_tokens', 0) or 0,
-            ),
+            usage=parse_messages_usage(payload.get('usage')),
         )
 
     def stream_decoder(self) -> StreamDecoder:
@@ -234,7 +225,7 @@ class AnthropicCodec(Codec):
 
 class MessagesStreamDecoder(StreamDecoder):
     def __init__(self):
-        self._input_tokens = 0
+        self._start_usage = IRUsage()
         self._ended = False
         # Anthropic block index → 工具信息
         self._tools: dict[int, dict[str, Any]] = {}
@@ -248,8 +239,8 @@ class MessagesStreamDecoder(StreamDecoder):
 
         if event_type == 'message_start':
             message = payload.get('message', {})
-            usage = message.get('usage', {}) if isinstance(message, dict) else {}
-            self._input_tokens = usage.get('input_tokens', 0) or 0
+            if isinstance(message, dict):
+                self._start_usage = parse_messages_usage(message.get('usage'))
             return [StreamStart(id=message.get('id', ''), model=message.get('model', ''))]
 
         if event_type == 'content_block_start':
@@ -305,11 +296,15 @@ class MessagesStreamDecoder(StreamDecoder):
                 return []
             self._ended = True
             delta = payload.get('delta', {})
-            usage = payload.get('usage', {})
-            output_tokens = usage.get('output_tokens', 0) or 0 if isinstance(usage, dict) else 0
+            # message_delta 的 usage 通常只有 output_tokens，输入侧沿用 message_start 的统计
+            delta_usage = parse_messages_usage(payload.get('usage'))
             return [StreamEnd(
                 finish_reason=_STOP_TO_FINISH.get(delta.get('stop_reason', 'end_turn'), 'stop'),
-                usage=IRUsage(input_tokens=self._input_tokens, output_tokens=output_tokens),
+                usage=IRUsage(
+                    input_tokens=delta_usage.input_tokens or self._start_usage.input_tokens,
+                    output_tokens=delta_usage.output_tokens,
+                    cached_tokens=delta_usage.cached_tokens or self._start_usage.cached_tokens,
+                ),
             )]
 
         if event_type == 'error':
@@ -327,7 +322,10 @@ class MessagesStreamDecoder(StreamDecoder):
         self._ended = True
         return [StreamEnd(
             finish_reason='tool_calls' if self._tool_count else 'stop',
-            usage=IRUsage(input_tokens=self._input_tokens),
+            usage=IRUsage(
+                input_tokens=self._start_usage.input_tokens,
+                cached_tokens=self._start_usage.cached_tokens,
+            ),
         )]
 
 
@@ -383,7 +381,6 @@ class MessagesStreamEncoder(StreamEncoder):
             if self._ended:
                 return []
             self._ended = True
-            usage = event.usage or IRUsage()
             out = self._ensure_started() + self._close_block()
             out.append(sse_event('message_delta', {
                 'type': 'message_delta',
@@ -391,10 +388,7 @@ class MessagesStreamEncoder(StreamEncoder):
                     'stop_reason': _FINISH_TO_STOP.get(event.finish_reason, 'end_turn'),
                     'stop_sequence': None,
                 },
-                'usage': {
-                    'input_tokens': usage.input_tokens,
-                    'output_tokens': usage.output_tokens,
-                },
+                'usage': build_messages_usage(event.usage or IRUsage()),
             }))
             out.append(sse_event('message_stop', {'type': 'message_stop'}))
             return out
@@ -467,6 +461,37 @@ class MessagesStreamEncoder(StreamEncoder):
 # ═══════════════════════════════════════════════════════════
 #  请求 / 响应辅助
 # ═══════════════════════════════════════════════════════════
+
+
+def parse_messages_usage(usage: Any) -> IRUsage:
+    """解析 Anthropic usage。
+
+    Anthropic 的 input_tokens 不含缓存部分（cache_read / cache_creation 单独计数），
+    而 IRUsage.input_tokens 统一为"总输入"语义（与 CC 的 prompt_tokens、
+    Responses 的 input_tokens、Gemini 的 promptTokenCount 一致），这里做合并换算，
+    保证缓存命中的 token 不会在跨协议转换中丢失。
+    """
+    if not isinstance(usage, dict):
+        return IRUsage()
+    input_tokens = usage.get('input_tokens', 0) or 0
+    cache_read = usage.get('cache_read_input_tokens', 0) or 0
+    cache_creation = usage.get('cache_creation_input_tokens', 0) or 0
+    return IRUsage(
+        input_tokens=input_tokens + cache_read + cache_creation,
+        output_tokens=usage.get('output_tokens', 0) or 0,
+        cached_tokens=cache_read,
+    )
+
+
+def build_messages_usage(usage: IRUsage) -> dict[str, Any]:
+    """将 IRUsage（总输入语义）拆分回 Anthropic usage 结构。"""
+    cached = min(usage.cached_tokens, usage.input_tokens)
+    return {
+        'input_tokens': usage.input_tokens - cached,
+        'output_tokens': usage.output_tokens,
+        'cache_read_input_tokens': cached,
+        'cache_creation_input_tokens': 0,
+    }
 
 
 def fix_anthropic_tool_use(payload: dict[str, Any]) -> dict[str, Any]:
