@@ -36,6 +36,19 @@ def parse_json(data: str) -> dict[str, Any] | None:
     return parsed if isinstance(parsed, dict) else None
 
 
+def strip_version_suffix(base_url: str) -> str:
+    """剥离上游地址尾部的版本段，容忍用户把 https://relay.com/v1 填进来。
+
+    各编解码器总是重新拼接自己需要的规范版本段（/v1 或 /v1beta），
+    因此这里的剥离是无损的：https://relay.com/openai/v1 → https://relay.com/openai。
+    """
+    base = base_url.rstrip('/')
+    for suffix in ('/v1beta', '/v1'):
+        if base.endswith(suffix):
+            return base[:-len(suffix)]
+    return base
+
+
 class StreamDecoder:
     """上游 SSE → IR 事件。"""
 

@@ -39,7 +39,7 @@ from ..core.ir import (
     ToolResultBlock,
     gen_id,
 )
-from .base import Codec, StreamDecoder, StreamEncoder, parse_json, sse_data
+from .base import Codec, StreamDecoder, StreamEncoder, parse_json, sse_data, strip_version_suffix
 
 
 class ChatCompletionsCodec(Codec):
@@ -256,7 +256,7 @@ class ChatCompletionsCodec(Codec):
         return ChatStreamDecoder()
 
     def upstream_url(self, base_url: str, model: str, stream: bool) -> str:
-        return f'{base_url.rstrip("/")}/v1/chat/completions'
+        return f'{strip_version_suffix(base_url)}/v1/chat/completions'
 
 
 # ═══════════════════════════════════════════════════════════

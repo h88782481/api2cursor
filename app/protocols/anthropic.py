@@ -37,7 +37,7 @@ from ..core.ir import (
     ToolResultBlock,
     gen_id,
 )
-from .base import Codec, StreamDecoder, StreamEncoder, parse_json, sse_event
+from .base import Codec, StreamDecoder, StreamEncoder, parse_json, sse_event, strip_version_suffix
 
 # Anthropic stop_reason ↔ IR finish_reason
 _STOP_TO_FINISH = {
@@ -213,7 +213,7 @@ class AnthropicCodec(Codec):
         return MessagesStreamDecoder()
 
     def upstream_url(self, base_url: str, model: str, stream: bool) -> str:
-        return f'{base_url.rstrip("/")}/v1/messages'
+        return f'{strip_version_suffix(base_url)}/v1/messages'
 
     def build_headers(self, api_key: str) -> dict[str, str]:
         headers = {

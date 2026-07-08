@@ -69,8 +69,9 @@ def create_app() -> FastAPI:
 
         当配置了 `ACCESS_API_KEY` 时，除健康检查和管理面板相关路径外，
         所有请求都必须携带正确的 Bearer Token 或 `x-api-key`。
+        CORS 预检请求（OPTIONS）不校验，交给 CORS 中间件处理。
         """
-        if env.access_api_key:
+        if env.access_api_key and request.method != 'OPTIONS':
             path = request.url.path
             if not any(path == p or path.startswith(p + '/') or path.startswith(p) for p in _AUTH_SKIP):
                 auth = request.headers.get('authorization', '')

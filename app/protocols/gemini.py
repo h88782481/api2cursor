@@ -37,7 +37,7 @@ from ..core.ir import (
     ToolResultBlock,
     gen_id,
 )
-from .base import Codec, StreamDecoder, parse_json
+from .base import Codec, StreamDecoder, parse_json, strip_version_suffix
 
 _FINISH_REASON_MAP = {
     'STOP': 'stop',
@@ -133,7 +133,7 @@ class GeminiCodec(Codec):
 
     def upstream_url(self, base_url: str, model: str, stream: bool) -> str:
         # v1beta 是官方 SDK 默认版本；v1 端点不支持函数调用
-        base = base_url.rstrip('/')
+        base = strip_version_suffix(base_url)
         if stream:
             return f'{base}/v1beta/models/{model}:streamGenerateContent?alt=sse'
         return f'{base}/v1beta/models/{model}:generateContent'
