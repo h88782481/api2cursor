@@ -3,14 +3,25 @@ services:
     build: .
     container_name: api2cursor
     ports:
-      - "${PROXY_PORT:-3029}:${PROXY_PORT:-3029}"
-    env_file:
-      - .env
+      - "3029:3029"
+    environment:
+      # 上游中转站地址
+      PROXY_TARGET_URL: "https://your-relay-station.com"
+      # 上游 API 密钥
+      PROXY_API_KEY: "sk-xxx"
+      # 服务监听端口（修改时需同步修改上方 ports 映射和下方健康检查地址）
+      PROXY_PORT: "3029"
+      # 请求超时（秒）
+      API_TIMEOUT: "300"
+      # 访问鉴权密钥，留空不启用鉴权
+      ACCESS_API_KEY: ""
+      # 调试模式: off / simple / verbose
+      DEBUG_MODE: "off"
     volumes:
       - ./data:/app/data
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:${PROXY_PORT:-3029}/health"]
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3029/health"]
       interval: 30s
       timeout: 5s
       retries: 3

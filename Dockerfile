@@ -12,14 +12,11 @@ WORKDIR /app
 
 COPY --from=builder /install /usr/local
 
-COPY *.py ./
-COPY routes/ routes/
-COPY adapters/ adapters/
-COPY utils/ utils/
-COPY static/ static/
+COPY main.py ./
+COPY app/ app/
 
 RUN mkdir -p data
 
 EXPOSE 3029
 
-CMD ["python", "start.py"]
+CMD ["python", "main.py"]

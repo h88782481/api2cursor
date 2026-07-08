@@ -5,7 +5,6 @@
 # 环境变量
 .env
 .env.*
-!.env.example
 
 # Python 缓存
 __pycache__/
@@ -17,6 +16,17 @@ __pycache__/
 .venv/
 venv/
 
+# 本地测试
+tests/
+test_*.py
+*_test.py
+pytest.ini
+requirements-dev.txt
+.pytest_cache/
+
+# 运行时数据
+data/
+
 # IDE
 .vscode/
 .idea/
@@ -24,6 +34,7 @@ venv/
 
 # Docker 自身
 Dockerfile
+docker-compose.yml
 compose.yml
 .dockerignore
 
