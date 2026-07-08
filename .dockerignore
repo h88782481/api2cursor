@@ -1,6 +1,7 @@
 # 版本管理
 .git/
 .gitignore
+.github/
 
 # 环境变量
 .env

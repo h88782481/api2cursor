@@ -36,10 +36,18 @@ Cursor                          API 2 Cursor                        中转站
 
 ### Docker 部署（推荐）
 
+无需克隆仓库，只需要一个 `docker-compose.yml`：
+
 ```bash
-# 编辑 docker-compose.yml 中的 environment 配置，填入中转站地址和密钥
+# 下载 compose 文件
+curl -O https://raw.githubusercontent.com/h88782481/api2cursor/main/docker-compose.yml
+# 编辑 environment 中的中转站地址和密钥，然后启动
 docker compose up -d
 ```
+
+镜像发布在 `ghcr.io/h88782481/api2cursor`，推送 `v*` 标签时由 GitHub Actions 自动构建（支持 amd64 / arm64）。
+
+想自行构建镜像的话，克隆仓库后把 compose 中的 `image:` 换成 `build: .` 即可。
 
 ### 直接运行
 
@@ -50,6 +58,13 @@ python main.py
 ```
 
 服务启动后访问 `http://localhost:3029/admin` 进入管理面板。
+
+### 发布新版本（维护者）
+
+```bash
+git tag v1.0.0
+git push main v1.0.0   # 推送标签即触发自动构建发布
+```
 
 ## 配置
 

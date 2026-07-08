@@ -1,6 +1,6 @@
 services:
   api2cursor:
-    build: .
+    image: ghcr.io/h88782481/api2cursor:latest
     container_name: api2cursor
     ports:
       - "3029:3029"
