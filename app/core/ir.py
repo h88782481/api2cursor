@@ -55,7 +55,8 @@ class ThinkingBlock:
 class ToolCallBlock:
     id: str = ''
     name: str = ''
-    arguments: str = '{}'  # JSON 字符串
+    arguments: str = '{}'  # function 为 JSON；custom 为原始文本
+    tool_type: str = 'function'
 
 
 @dataclass
@@ -63,6 +64,7 @@ class ToolResultBlock:
     call_id: str = ''
     content: str = ''
     name: str = ''  # 工具名（Gemini functionResponse 等协议需要）
+    tool_type: str = 'function'
 
 
 Block = Union[TextBlock, ImageBlock, ThinkingBlock, ToolCallBlock, ToolResultBlock]
@@ -94,6 +96,8 @@ class IRTool:
     name: str = ''
     description: str = ''
     parameters: dict[str, Any] = field(default_factory=dict)
+    tool_type: str = 'function'
+    format: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -166,6 +170,7 @@ class ToolCallStart:
     index: int = 0
     id: str = ''
     name: str = ''
+    tool_type: str = 'function'
 
 
 @dataclass
@@ -182,6 +187,7 @@ class ToolCallEnd:
     id: str = ''
     name: str = ''
     arguments: str = ''
+    tool_type: str = 'function'
 
 
 @dataclass

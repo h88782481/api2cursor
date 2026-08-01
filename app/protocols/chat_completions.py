@@ -17,7 +17,13 @@ import json
 import time
 from typing import Any
 
-from ..compat.tools import dump_arguments, parse_tool_choice, parse_tool_definitions
+from ..compat.tools import (
+    degrade_custom_tools,
+    dump_arguments,
+    parse_tool_choice,
+    parse_tool_definitions,
+    restore_custom_tool_calls,
+)
 from ..core.ir import (
     Block,
     IRMessage,
@@ -495,7 +501,17 @@ def normalize_cc_request(payload: dict[str, Any], upstream_model: str) -> dict[s
         payload['messages'] = converted
 
     if isinstance(payload.get('tools'), list):
-        payload['tools'] = [_normalize_tool_definition(t) for t in payload['tools']]
+        request = ChatCompletionsCodec().parse_request(payload)
+        custom_names = {tool.name for tool in request.tools if tool.tool_type == 'custom'}
+        if custom_names:
+            request.model = upstream_model
+            restore_custom_tool_calls(request, custom_names)
+            degrade_custom_tools(request)
+            converted = ChatCompletionsCodec().build_request(request, upstream_model)
+            payload['messages'] = converted['messages']
+            payload['tools'] = converted['tools']
+        else:
+            payload['tools'] = [_normalize_function_tool(t) for t in payload['tools']]
 
     tool_choice = payload.get('tool_choice')
     if isinstance(tool_choice, dict):
@@ -567,10 +583,11 @@ def _normalize_cc_message(message: Any) -> list[Any]:
     return [message]
 
 
-def _normalize_tool_definition(tool: Any) -> Any:
+def _normalize_function_tool(tool: Any) -> Any:
+    """将非 custom 的扁平工具定义补成标准 Chat Completions function。"""
     if not isinstance(tool, dict):
         return tool
-    if tool.get('type') == 'function' and 'function' in tool:
+    if tool.get('type') == 'function' and isinstance(tool.get('function'), dict):
         return tool
     if 'name' not in tool:
         return tool

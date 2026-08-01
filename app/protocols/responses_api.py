@@ -83,7 +83,7 @@ class ResponsesCodec(Codec):
         if text:
             output.append(_message_item(gen_id('msg_'), text))
         for block in response.tool_calls():
-            output.append(_function_call_item(gen_id('fc_'), block.id, block.name, block.arguments))
+            output.append(_tool_call_item(block))
 
         return {
             'id': response.id or gen_id('resp_'),
@@ -118,15 +118,7 @@ class ResponsesCodec(Codec):
         if request.system:
             payload['instructions'] = request.system
         if request.tools:
-            payload['tools'] = [
-                {
-                    'type': 'function',
-                    'name': t.name,
-                    'description': t.description,
-                    'parameters': t.parameters,
-                }
-                for t in request.tools
-            ]
+            payload['tools'] = [_build_tool_definition(t) for t in request.tools]
         tool_choice = _build_tool_choice(request.tool_choice)
         if tool_choice is not None:
             payload['tool_choice'] = tool_choice
@@ -203,6 +195,7 @@ class ResponsesStreamDecoder(StreamDecoder):
         self._ended = False
         # 上游 output_index → 工具信息
         self._tools: dict[int, dict[str, Any]] = {}
+        self._closed_tools: dict[int, dict[str, Any]] = {}
         self._tool_count = 0
 
     def decode(self, event_type: str, data: str) -> list[StreamEvent]:
@@ -256,10 +249,12 @@ class ResponsesStreamDecoder(StreamDecoder):
                 id=tool['call_id'],
                 name=tool['name'],
                 arguments=tool['args'],
+                tool_type=tool['tool_type'],
             )
             for tool in self._tools.values()
         ]
         self._tools.clear()
+        self._closed_tools.clear()
         events.append(StreamEnd(
             finish_reason='tool_calls' if self._tool_count else 'stop',
         ))
@@ -284,13 +279,21 @@ class ResponsesStreamDecoder(StreamDecoder):
             name = item.get('name', '')
             initial_args = item.get('arguments', '') or ''
 
-        self._tools[output_index] = {
+        tool = {
             'index': our_index,
             'call_id': call_id,
             'name': name,
             'args': initial_args,
+            'tool_type': 'custom' if item_type == 'custom_tool_call' else 'function',
         }
-        events: list[StreamEvent] = [ToolCallStart(index=our_index, id=call_id, name=name)]
+        self._tools[output_index] = tool
+        self._closed_tools.pop(output_index, None)
+        events: list[StreamEvent] = [ToolCallStart(
+            index=our_index,
+            id=call_id,
+            name=name,
+            tool_type=tool['tool_type'],
+        )]
         if initial_args:
             events.append(ToolCallDelta(index=our_index, arguments=initial_args))
         return events
@@ -302,6 +305,8 @@ class ResponsesStreamDecoder(StreamDecoder):
         tool = self._find_tool(payload.get('output_index'))
         if tool is None:
             return []
+        if tool.get('closed'):
+            return []
         tool['args'] += delta
         return [ToolCallDelta(index=tool['index'], arguments=delta)]
 
@@ -311,9 +316,13 @@ class ResponsesStreamDecoder(StreamDecoder):
         if isinstance(output_index, int):
             tool = self._tools.pop(output_index, None)
         elif self._tools:
-            tool = self._tools.pop(max(self._tools), None)
+            output_index = max(self._tools)
+            tool = self._tools.pop(output_index, None)
         if tool is None:
             return []
+        tool['closed'] = True
+        if isinstance(output_index, int):
+            self._closed_tools[output_index] = tool
         arguments = payload.get('arguments') or payload.get('input') or tool['args']
         name = payload.get('name') or tool['name']
         return [ToolCallEnd(
@@ -321,6 +330,7 @@ class ResponsesStreamDecoder(StreamDecoder):
             id=tool['call_id'],
             name=name,
             arguments=arguments,
+            tool_type=tool['tool_type'],
         )]
 
     def _handle_completed(self, payload: dict[str, Any], *, incomplete: bool) -> list[StreamEvent]:
@@ -335,10 +345,12 @@ class ResponsesStreamDecoder(StreamDecoder):
                 id=tool['call_id'],
                 name=tool['name'],
                 arguments=tool['args'],
+                tool_type=tool['tool_type'],
             )
             for tool in self._tools.values()
         ]
         self._tools.clear()
+        self._closed_tools.clear()
 
         has_tools = self._tool_count > 0 or any(
             isinstance(item, dict) and item.get('type') in ('function_call', 'custom_tool_call')
@@ -358,10 +370,12 @@ class ResponsesStreamDecoder(StreamDecoder):
         return events
 
     def _find_tool(self, output_index: Any) -> dict[str, Any] | None:
-        if isinstance(output_index, int) and output_index in self._tools:
-            return self._tools[output_index]
+        if isinstance(output_index, int):
+            return self._tools.get(output_index) or self._closed_tools.get(output_index)
         if self._tools:
             return self._tools[max(self._tools)]
+        if self._closed_tools:
+            return self._closed_tools[max(self._closed_tools)]
         return None
 
 
@@ -372,18 +386,19 @@ class ResponsesStreamDecoder(StreamDecoder):
 
 @dataclass
 class _ToolItem:
-    """function_call 输出项的流式缓冲。"""
+    """function_call / custom_tool_call 输出项的流式缓冲。"""
 
     output_index: int
     fc_id: str
     call_id: str
     name: str
+    tool_type: str = 'function'
     args: str = ''
     closed: bool = False
 
 
 class ResponsesStreamEncoder(StreamEncoder):
-    """维护 reasoning / message / function_call 输出项生命周期的状态机。"""
+    """维护 reasoning / message / tool call 输出项生命周期的状态机。"""
 
     def __init__(self, client_model: str):
         self._model = client_model
@@ -459,8 +474,13 @@ class ResponsesStreamEncoder(StreamEncoder):
             if tool is None or tool.closed:
                 return []
             tool.args += event.arguments
-            return [self._emit('response.function_call_arguments.delta', {
-                'type': 'response.function_call_arguments.delta',
+            event_type = (
+                'response.custom_tool_call_input.delta'
+                if tool.tool_type == 'custom'
+                else 'response.function_call_arguments.delta'
+            )
+            return [self._emit(event_type, {
+                'type': event_type,
                 'item_id': tool.fc_id,
                 'output_index': tool.output_index,
                 'delta': event.arguments,
@@ -573,22 +593,24 @@ class ResponsesStreamEncoder(StreamEncoder):
         out = self._close_reasoning() + self._close_text()
         tool = _ToolItem(
             output_index=self._alloc_index(),
-            fc_id=gen_id('fc_'),
+            fc_id=gen_id('ctc_' if event.tool_type == 'custom' else 'fc_'),
             call_id=event.id or gen_id('call_'),
             name=event.name,
+            tool_type=event.tool_type,
         )
         self._tools[event.index] = tool
+        item = {
+            'id': tool.fc_id,
+            'type': 'custom_tool_call' if tool.tool_type == 'custom' else 'function_call',
+            'status': 'in_progress',
+            'call_id': tool.call_id,
+            'name': tool.name,
+        }
+        item['input' if tool.tool_type == 'custom' else 'arguments'] = ''
         out.append(self._emit('response.output_item.added', {
             'type': 'response.output_item.added',
             'output_index': tool.output_index,
-            'item': {
-                'id': tool.fc_id,
-                'type': 'function_call',
-                'status': 'in_progress',
-                'call_id': tool.call_id,
-                'name': tool.name,
-                'arguments': '',
-            },
+            'item': item,
         }))
         return out
 
@@ -596,16 +618,22 @@ class ResponsesStreamEncoder(StreamEncoder):
         if tool.closed:
             return []
         tool.closed = True
-        item = _function_call_item(tool.fc_id, tool.call_id, tool.name, tool.args)
+        item = _tool_item(tool.fc_id, tool.call_id, tool.name, tool.args, tool.tool_type)
         self._output_items.append(item)
+        event_type = (
+            'response.custom_tool_call_input.done'
+            if tool.tool_type == 'custom'
+            else 'response.function_call_arguments.done'
+        )
+        done = {
+            'type': event_type,
+            'item_id': tool.fc_id,
+            'output_index': tool.output_index,
+            'name': tool.name,
+        }
+        done['input' if tool.tool_type == 'custom' else 'arguments'] = tool.args
         return [
-            self._emit('response.function_call_arguments.done', {
-                'type': 'response.function_call_arguments.done',
-                'item_id': tool.fc_id,
-                'output_index': tool.output_index,
-                'name': tool.name,
-                'arguments': tool.args,
-            }),
+            self._emit(event_type, done),
             self._emit('response.output_item.done', {
                 'type': 'response.output_item.done',
                 'output_index': tool.output_index,
@@ -669,23 +697,26 @@ def _parse_input_items(items: list[Any], messages: list[IRMessage]) -> None:
             pending_thinking = _extract_reasoning_text(item)
             continue
 
-        if item_type == 'function_call':
+        if item_type in ('function_call', 'custom_tool_call'):
             message = _last_assistant_or_new(messages)
             if pending_thinking and not message.has_thinking():
                 message.blocks.insert(0, ThinkingBlock(text=pending_thinking))
                 pending_thinking = None
+            is_custom = item_type == 'custom_tool_call'
             message.blocks.append(ToolCallBlock(
                 id=item.get('call_id') or gen_id('call_'),
                 name=item.get('name', ''),
-                arguments=dump_arguments(item.get('arguments', '{}')),
+                arguments=dump_arguments(item.get('input', '') if is_custom else item.get('arguments', '{}')),
+                tool_type='custom' if is_custom else 'function',
             ))
             continue
 
-        if item_type == 'function_call_output':
+        if item_type in ('function_call_output', 'custom_tool_call_output'):
             output = item.get('output', '')
             messages.append(IRMessage('user', [ToolResultBlock(
                 call_id=item.get('call_id', ''),
                 content=output if isinstance(output, str) else dump_arguments(output),
+                tool_type='custom' if item_type == 'custom_tool_call_output' else 'function',
             )]))
             continue
 
@@ -760,17 +791,19 @@ def _append_input_items(message: IRMessage, items: list[dict[str, Any]]) -> None
             })
         for block in message.blocks:
             if isinstance(block, ToolCallBlock):
-                items.append({
-                    'type': 'function_call',
+                item = {
+                    'type': 'custom_tool_call' if block.tool_type == 'custom' else 'function_call',
                     'call_id': block.id or gen_id('call_'),
                     'name': block.name,
-                    'arguments': block.arguments,
-                })
+                }
+                item['input' if block.tool_type == 'custom' else 'arguments'] = block.arguments
+                items.append(item)
         # thinking 块不回传：Responses 上游通过自身的 reasoning 项管理思考内容
         return
 
     for block in message.blocks:
         if isinstance(block, ToolResultBlock):
+            # 工具结果统一走 function_call_output：多数中转站对 custom_tool_call_output 支持不完整
             items.append({
                 'type': 'function_call_output',
                 'call_id': block.call_id,
@@ -792,6 +825,24 @@ def _append_input_items(message: IRMessage, items: list[dict[str, Any]]) -> None
             'role': 'user',
             'content': '\n'.join(b.text for b in text_blocks),
         })
+
+
+def _build_tool_definition(tool: Any) -> dict[str, Any]:
+    if tool.tool_type == 'custom':
+        definition = {'type': 'custom', 'name': tool.name}
+        if tool.description:
+            definition['description'] = tool.description
+        if tool.format:
+            definition['format'] = tool.format
+        return definition
+    definition = {
+        'type': 'function',
+        'name': tool.name,
+        'parameters': tool.parameters,
+    }
+    if tool.description:
+        definition['description'] = tool.description
+    return definition
 
 
 def _build_tool_choice(tool_choice: Any) -> Any:
@@ -825,15 +876,32 @@ def _message_item(item_id: str, text: str) -> dict[str, Any]:
     }
 
 
-def _function_call_item(item_id: str, call_id: str, name: str, arguments: str) -> dict[str, Any]:
-    return {
+def _tool_call_item(block: ToolCallBlock) -> dict[str, Any]:
+    return _tool_item(
+        gen_id('ctc_' if block.tool_type == 'custom' else 'fc_'),
+        block.id,
+        block.name,
+        block.arguments,
+        block.tool_type,
+    )
+
+
+def _tool_item(
+    item_id: str,
+    call_id: str,
+    name: str,
+    arguments: str,
+    tool_type: str = 'function',
+) -> dict[str, Any]:
+    item = {
         'id': item_id,
-        'type': 'function_call',
+        'type': 'custom_tool_call' if tool_type == 'custom' else 'function_call',
         'status': 'completed',
         'call_id': call_id or gen_id('call_'),
         'name': name,
-        'arguments': arguments,
     }
+    item['input' if tool_type == 'custom' else 'arguments'] = arguments
+    return item
 
 
 def _parse_tool_call_item(item: dict[str, Any]) -> ToolCallBlock:
@@ -842,6 +910,7 @@ def _parse_tool_call_item(item: dict[str, Any]) -> ToolCallBlock:
             id=item.get('call_id') or item.get('id') or gen_id('call_'),
             name=item.get('name') or item.get('namespace') or 'custom_tool',
             arguments=dump_arguments(item.get('input', '')),
+            tool_type='custom',
         )
     return ToolCallBlock(
         id=item.get('call_id') or item.get('id') or gen_id('call_'),

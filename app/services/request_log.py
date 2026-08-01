@@ -17,6 +17,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import threading
 from datetime import datetime, timezone
 from typing import Any
@@ -31,6 +32,11 @@ _LOCKS: dict[str, threading.Lock] = {}
 _LOCKS_GUARD = threading.Lock()
 _STREAM_KEEP_HEAD = 12
 _STREAM_KEEP_TAIL = 12
+
+# Cursor Agent 会把真实用户问题包在 <user_query> 里，并常附带 <timestamp>。
+# 用这两者做种子，可在工具多轮中保持稳定，又避免不同对话因相同上下文前缀撞车。
+_USER_QUERY_RE = re.compile(r'<user_query>\s*(.*?)\s*</user_query>', re.DOTALL)
+_TIMESTAMP_RE = re.compile(r'<timestamp>\s*(.*?)\s*</timestamp>', re.DOTALL)
 
 
 def debug_enabled() -> bool:
@@ -319,17 +325,20 @@ def _pick_explicit_conversation_id(payload: dict[str, Any]) -> str:
 def _conversation_seed(route: str, payload: dict[str, Any]) -> str:
     """生成稳定的对话种子。
 
-    关键原则：不能直接把整段历史消息都放进 seed，否则每一轮历史增长都会导致
-    conversation_id 改变。这里基于"对话根消息"（第一条 user + 第一条 assistant）生成。
+    关键原则：
+    1. 不能把整段历史或 assistant/tool 调用放进 seed，否则工具多轮会导致
+       conversation_id 变化，一次对话被拆成多个文件。
+    2. 优先使用 Cursor 的 <user_query> + 同消息内 <timestamp>，在多轮中保持稳定，
+       又能区分相同问题发起的不同对话。
+    3. 非 Cursor 客户端回退到第一条 user 文本。
     """
     if route == 'chat':
         return 'chat|' + _root_seed_from_messages(payload.get('messages', []))
     if route == 'responses':
         return 'responses|' + _root_seed_from_responses_input(payload)
     if route == 'messages':
-        system = payload.get('system', '')
-        root = _root_seed_from_messages(payload.get('messages', []))
-        return 'messages|' + str(system) + '|' + root
+        # messages 路由的 system 可能很大且随模型变化；根消息已足够区分对话
+        return 'messages|' + _root_seed_from_messages(payload.get('messages', []))
     return route + '|' + _pick_explicit_conversation_id(payload)
 
 
@@ -337,97 +346,112 @@ def _root_seed_from_messages(messages: Any) -> str:
     if not isinstance(messages, list):
         return ''
 
-    first_user = None
-    first_assistant = None
+    first_user_text = ''
     for msg in messages:
-        if not isinstance(msg, dict):
+        if not isinstance(msg, dict) or msg.get('role') != 'user':
             continue
-        role = msg.get('role', '')
-        if role in ('system', 'developer'):
+        text = _flatten_text(msg.get('content'))
+        if not text:
             continue
-        normalized = {
-            'role': role,
-            'content': _normalize_content(msg.get('content')),
-            'tool_call_id': msg.get('tool_call_id', ''),
-            'tool_calls': [
-                {
-                    'id': tc.get('id', ''),
-                    'name': (tc.get('function') or {}).get('name', ''),
-                }
-                for tc in msg.get('tool_calls', [])
-                if isinstance(tc, dict)
-            ],
-        }
-        if role == 'user' and first_user is None:
-            first_user = normalized
-        elif role == 'assistant' and first_assistant is None:
-            first_assistant = normalized
-        if first_user is not None and first_assistant is not None:
-            break
+        if not first_user_text:
+            first_user_text = text
+        query_seed = _seed_from_user_query_text(text)
+        if query_seed:
+            return query_seed
 
-    seed_parts = [p for p in (first_user, first_assistant) if p is not None]
-    return json.dumps(seed_parts, ensure_ascii=False, separators=(',', ':'))
+    # 回退：仅用第一条 user，故意不纳入 assistant，避免工具轮次拆分会话
+    if first_user_text:
+        return json.dumps({'user': first_user_text}, ensure_ascii=False, separators=(',', ':'))
+    return ''
 
 
 def _root_seed_from_responses_input(payload: dict[str, Any]) -> str:
-    instructions = payload.get('instructions') or ''
     input_data = payload.get('input', [])
 
     if isinstance(input_data, str):
-        seed_input = input_data
-    elif isinstance(input_data, list):
-        seed_input = _root_seed_from_responses_items(input_data)
-    else:
-        seed_input = json.dumps(input_data, ensure_ascii=False, default=str)
+        query_seed = _seed_from_user_query_text(input_data)
+        if query_seed:
+            return query_seed
+        return json.dumps({'user': input_data}, ensure_ascii=False, separators=(',', ':'))
 
-    return str(instructions) + '|' + seed_input
+    if isinstance(input_data, list):
+        return _root_seed_from_responses_items(input_data)
+
+    return json.dumps(input_data, ensure_ascii=False, default=str, separators=(',', ':'))
 
 
 def _root_seed_from_responses_items(items: list[Any]) -> str:
-    first_user = None
-    first_assistant = None
+    first_user_text = ''
 
     for item in items:
-        if not isinstance(item, dict):
+        if isinstance(item, str):
+            text = item
+            role = 'user'
+        elif isinstance(item, dict):
+            item_type = item.get('type', '')
+            role = item.get('role', '')
+            if item_type in (
+                'function_call', 'custom_tool_call',
+                'function_call_output', 'custom_tool_call_output',
+                'reasoning',
+            ):
+                continue
+            # 只采 user 侧文本；无 role 的 input_text 也视为用户输入
+            if role not in ('', 'user'):
+                continue
+            text = _flatten_text(item.get('content') or item.get('text') or '')
+        else:
             continue
-        item_type = item.get('type', '')
-        role = item.get('role', '')
 
-        if item_type in ('message', 'input_text', 'output_text') or (role and not item_type):
-            normalized = {
-                'type': item_type,
-                'role': role,
-                'content': _normalize_content(
-                    item.get('content')
-                    or item.get('text')
-                    or ''
-                ),
-            }
-            if role == 'user' and first_user is None:
-                first_user = normalized
-            elif role == 'assistant' and first_assistant is None:
-                first_assistant = normalized
-        elif item_type == 'function_call' and first_assistant is None:
-            first_assistant = {
-                'type': 'function_call',
-                'name': item.get('name', ''),
-                'call_id': item.get('call_id', ''),
-            }
+        if not text:
+            continue
+        if not first_user_text:
+            first_user_text = text
+        query_seed = _seed_from_user_query_text(text)
+        if query_seed:
+            return query_seed
 
-        if first_user is not None and first_assistant is not None:
-            break
-
-    seed_parts = [p for p in (first_user, first_assistant) if p is not None]
-    return json.dumps(seed_parts, ensure_ascii=False, separators=(',', ':'))
+    if first_user_text:
+        return json.dumps({'user': first_user_text}, ensure_ascii=False, separators=(',', ':'))
+    return ''
 
 
-def _normalize_content(content: Any) -> Any:
+def _seed_from_user_query_text(text: str) -> str:
+    """若文本含 Cursor <user_query>，生成稳定种子；否则返回空串。"""
+    match = _USER_QUERY_RE.search(text or '')
+    if not match:
+        return ''
+    timestamp = ''
+    ts_match = _TIMESTAMP_RE.search(text or '')
+    if ts_match:
+        timestamp = ts_match.group(1).strip()
+    return json.dumps(
+        {
+            'user_query': match.group(1).strip(),
+            'timestamp': timestamp,
+        },
+        ensure_ascii=False,
+        separators=(',', ':'),
+    )
+
+
+def _flatten_text(content: Any) -> str:
+    """把 user content 压成纯文本，便于提取 user_query / timestamp。"""
+    if content is None:
+        return ''
     if isinstance(content, str):
         return content
     if isinstance(content, list):
-        return [item if isinstance(item, dict) else str(item) for item in content]
-    if content is None:
-        return ''
+        parts: list[str] = []
+        for item in content:
+            if isinstance(item, str):
+                if item:
+                    parts.append(item)
+            elif isinstance(item, dict):
+                text = item.get('text') or item.get('content') or ''
+                if text:
+                    parts.append(str(text))
+        return '\n'.join(parts)
     return str(content)
 
 

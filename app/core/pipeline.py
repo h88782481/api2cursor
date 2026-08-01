@@ -30,11 +30,18 @@ from ..compat.thinking import (
     inject_thinking_into_messages_response,
     thinking_cache,
 )
-from ..compat.tools import fix_tool_call_block
+from ..compat.tools import (
+    CustomToolStreamRestoreState,
+    degrade_custom_tools,
+    fix_tool_call_block,
+    restore_custom_tool_calls,
+    restore_custom_tool_events,
+    unwrap_custom_tool_input,
+)
 from ..protocols import get_codec
 from ..protocols.anthropic import parse_messages_usage
 from ..protocols.base import parse_json, sse_data, sse_event
-from ..protocols.chat_completions import normalize_cc_request
+from ..protocols.chat_completions import normalize_cc_request, parse_cc_usage
 from ..protocols.responses_api import ensure_prompt_cache_key, parse_responses_usage
 from ..services import request_log
 from ..services.usage import usage_tracker
@@ -94,7 +101,13 @@ async def handle_entry(request: Request, entry_format: str) -> Response:
 
     # ─── 请求准备 ───
     ir_request: IRRequest | None = None
+    custom_tool_names: set[str] = set()
     if parse_format == decision.upstream_format:
+        if parse_format == 'chat':
+            tool_request = get_codec('chat').parse_request(payload)
+            custom_tool_names = {
+                tool.name for tool in tool_request.tools if tool.tool_type == 'custom'
+            }
         body = _prepare_native_request(parse_format, payload, decision)
     else:
         ir_request = get_codec(parse_format).parse_request(payload)
@@ -104,9 +117,14 @@ async def handle_entry(request: Request, entry_format: str) -> Response:
             ir_request.system = _merge_text(
                 decision.custom_instructions, ir_request.system, decision.instructions_position,
             )
+        custom_tool_names = {
+            tool.name for tool in ir_request.tools if tool.tool_type == 'custom'
+        }
+        restore_custom_tool_calls(ir_request, custom_tool_names)
         # Responses 上游通过自身的 reasoning 项管理思考内容，不做缓存注入
         if decision.upstream_format != 'responses':
             thinking_cache.inject_ir(ir_request)
+            degrade_custom_tools(ir_request)
         body = upstream_codec.build_request(ir_request, decision.upstream_model)
 
     _apply_body_modifications(body, decision.body_modifications)
@@ -118,6 +136,7 @@ async def handle_entry(request: Request, entry_format: str) -> Response:
         decision.client_format == decision.upstream_format
         and decision.client_format in _RAW_RESPONSE_FORMATS
     )
+    convert_response = bool(custom_tool_names) and decision.client_format == 'chat'
 
     client: httpx.AsyncClient = request.app.state.http_client
     request_log.attach_upstream_request(turn, body, headers)
@@ -126,11 +145,11 @@ async def handle_entry(request: Request, entry_format: str) -> Response:
     if stream:
         return await _handle_stream(
             client, url, headers, body, decision, parse_format,
-            raw_response, ir_request, payload, turn,
+            raw_response, convert_response, ir_request, payload, turn, custom_tool_names,
         )
     return await _handle_non_stream(
         client, url, headers, body, decision, parse_format,
-        raw_response, ir_request, payload, turn,
+        raw_response, convert_response, ir_request, payload, turn, custom_tool_names,
     )
 
 
@@ -147,9 +166,11 @@ async def _handle_non_stream(
     decision: RouteDecision,
     parse_format: str,
     raw_response: bool,
+    convert_response: bool,
     ir_request: IRRequest | None,
     original_payload: dict[str, Any],
     turn: dict[str, Any] | None,
+    custom_tool_names: set[str],
 ) -> Response:
     try:
         resp = await post_json(client, url, headers, body)
@@ -185,12 +206,20 @@ async def _handle_non_stream(
     reasoning = ''
     if raw_response:
         result, usage = _finalize_raw_response(decision, data)
+    elif not convert_response and decision.client_format == decision.upstream_format:
+        result = data
+        if result.get('model'):
+            result['model'] = decision.client_model
+        usage = parse_cc_usage(data.get('usage'))
     else:
         upstream_codec = get_codec(decision.upstream_format)
         ir_response = upstream_codec.parse_response(data)
         if decision.upstream_format == 'chat':
             extract_think_from_response(ir_response)
         for block in ir_response.tool_calls():
+            if block.name in custom_tool_names:
+                block.arguments = unwrap_custom_tool_input(block.arguments)
+                block.tool_type = 'custom'
             fix_tool_call_block(block)
         result = get_codec(decision.client_format).build_response(ir_response, decision.client_model)
         usage = ir_response.usage
@@ -235,9 +264,11 @@ async def _handle_stream(
     decision: RouteDecision,
     parse_format: str,
     raw_response: bool,
+    convert_response: bool,
     ir_request: IRRequest | None,
     original_payload: dict[str, Any],
     turn: dict[str, Any] | None,
+    custom_tool_names: set[str],
 ) -> Response:
     try:
         resp = await post_stream(client, url, headers, body)
@@ -265,9 +296,12 @@ async def _handle_stream(
 
     if raw_response:
         generator = _raw_stream(resp, decision, turn)
+    elif not convert_response and decision.client_format == decision.upstream_format:
+        generator = _passthrough_chat_stream(resp, decision, turn)
     else:
         generator = _convert_stream(
             resp, decision, parse_format, ir_request, original_payload, turn,
+            custom_tool_names,
         )
     return StreamingResponse(generator, media_type='text/event-stream', headers=_SSE_HEADERS)
 
@@ -279,6 +313,7 @@ async def _convert_stream(
     ir_request: IRRequest | None,
     original_payload: dict[str, Any],
     turn: dict[str, Any] | None,
+    custom_tool_names: set[str],
 ) -> AsyncIterator[str]:
     """IR 转换流：上游 SSE → 解码 → 过滤器 → 编码 → 客户端 SSE。"""
     upstream_codec = get_codec(decision.upstream_format)
@@ -286,6 +321,9 @@ async def _convert_stream(
     decoder = upstream_codec.stream_decoder()
     encoder = client_codec.stream_encoder(decision.client_model)
     filters = [ThinkTagFilter()] if decision.upstream_format == 'chat' else []
+    # 仅「已降级为 function」的上游需要还原 {"input":...}；Responses 原生 custom 增量透传
+    restore_names = custom_tool_names if decision.upstream_format != 'responses' else set()
+    custom_tool_state = CustomToolStreamRestoreState(restore_names)
 
     usage: IRUsage | None = None
     thinking_parts: list[str] = []
@@ -312,7 +350,10 @@ async def _convert_stream(
             async for event_type, data in iter_sse(resp):
                 upstream_count += 1
                 request_log.append_upstream_event(turn, {'type': event_type, 'data': data})
-                events = _run_filters(filters, decoder.decode(event_type, data))
+                events = restore_custom_tool_events(
+                    _run_filters(filters, decoder.decode(event_type, data)),
+                    custom_tool_state,
+                )
                 for event in events:
                     track(event)
                     for message in encoder.encode(event):
@@ -320,7 +361,10 @@ async def _convert_stream(
                         request_log.append_client_event(turn, {'raw': message})
                         yield message
 
-            tail = _run_filters(filters, decoder.finalize()) + _finalize_filters(filters)
+            tail = restore_custom_tool_events(
+                _run_filters(filters, decoder.finalize()) + _finalize_filters(filters),
+                custom_tool_state,
+            )
             for event in tail:
                 track(event)
                 for message in encoder.encode(event):
@@ -349,6 +393,48 @@ async def _convert_stream(
         if usage is not None:
             logger.info('[%s] 流式完成 输入令牌=%s 输出令牌=%s',
                         decision.client_format, usage.input_tokens, usage.output_tokens)
+
+
+async def _passthrough_chat_stream(
+    resp: httpx.Response,
+    decision: RouteDecision,
+    turn: dict[str, Any] | None,
+) -> AsyncIterator[str]:
+    """chat → chat 无 custom tool 时原样透传，避免 IR 往返改变事件。"""
+    upstream_count = 0
+    client_count = 0
+    usage: IRUsage | None = None
+    try:
+        try:
+            async for event_type, data in iter_sse(resp):
+                upstream_count += 1
+                request_log.append_upstream_event(turn, {'type': event_type, 'data': data})
+                payload = parse_json(data)
+                if payload is None:
+                    message = sse_event(event_type, data) if event_type else sse_data(data)
+                else:
+                    if payload.get('model'):
+                        payload['model'] = decision.client_model
+                    raw_usage = payload.get('usage')
+                    if isinstance(raw_usage, dict):
+                        usage = parse_cc_usage(raw_usage)
+                    message = sse_event(event_type, payload) if event_type else sse_data(payload)
+                client_count += 1
+                request_log.append_client_event(turn, {'raw': message})
+                yield message
+        except httpx.HTTPError as e:
+            logger.error('读取上游流失败: %s', e)
+            request_log.attach_error(turn, {'stage': 'stream_read', 'message': str(e)})
+            yield get_codec('chat').error_event(f'读取上游流失败: {e}', 'proxy_error')
+    finally:
+        await resp.aclose()
+        usage_tracker.record(decision.client_model, usage)
+        request_log.set_stream_summary(turn, {
+            'upstream_event_count': upstream_count,
+            'client_event_count': client_count,
+            'usage': _usage_dict(usage) if usage else None,
+        })
+        request_log.finalize_turn(turn, usage=_usage_dict(usage) if usage else None)
 
 
 async def _raw_stream(

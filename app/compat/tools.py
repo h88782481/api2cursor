@@ -1,7 +1,7 @@
 """工具定义规范化与参数修复
 
 集中处理旧版散落在各 adapter 中的工具兼容逻辑：
-  - 工具定义统一解析为 IRTool（兼容 OpenAI 嵌套、Responses 扁平、Anthropic input_schema、Cursor 扁平四种写法）
+  - 工具定义统一解析为 IRTool（兼容 OpenAI 嵌套、Responses function/custom、Anthropic input_schema、Cursor 扁平写法）
   - tool_choice 各协议写法互转
   - LLM 生成参数的常见问题修复：智能引号、file_path→path、StrReplace 精确匹配
 """
@@ -11,9 +11,19 @@ from __future__ import annotations
 import json
 import os
 import re
+from dataclasses import dataclass, field
 from typing import Any
 
-from ..core.ir import IRTool, ToolCallBlock
+from ..core.ir import (
+    IRRequest,
+    IRTool,
+    StreamEvent,
+    ToolCallBlock,
+    ToolCallDelta,
+    ToolCallEnd,
+    ToolCallStart,
+    ToolResultBlock,
+)
 
 # 智能引号字符集
 _SMART_DOUBLE = frozenset('«»\u201c\u201d\u275e\u201f\u201e\u275d')
@@ -52,6 +62,15 @@ def _parse_tool_definition(tool: Any) -> IRTool | None:
             parameters=func.get('parameters') or _EMPTY_SCHEMA,
         )
 
+    # Responses 自定义工具: {type: "custom", name, format}
+    if tool.get('type') == 'custom' and tool.get('name'):
+        return IRTool(
+            name=tool.get('name', ''),
+            description=tool.get('description', ''),
+            tool_type='custom',
+            format=tool.get('format') or {},
+        )
+
     # Responses 扁平格式: {type: "function", name, parameters} 或
     # Cursor / Anthropic 扁平格式: {name, input_schema | parameters}
     if 'name' in tool:
@@ -81,13 +100,161 @@ def parse_tool_choice(tool_choice: Any) -> Any:
             return 'required'
         if choice_type == 'none':
             return 'none'
-        if choice_type == 'function':
+        if choice_type in ('function', 'custom'):
             name = tool_choice.get('name') or (tool_choice.get('function') or {}).get('name')
             if name:
                 return {'name': name}
         if choice_type == 'tool' and tool_choice.get('name'):
             return {'name': tool_choice['name']}
     return None
+
+
+def degrade_custom_tools(request: IRRequest) -> set[str]:
+    """将不支持 custom tool 的上游安全降级为单字符串 function tool。
+
+    返回被降级的工具名集合，供响应侧把 JSON 包装还原为原始文本语义。
+    """
+    names = {tool.name for tool in request.tools if tool.tool_type == 'custom' and tool.name}
+    for tool in request.tools:
+        if tool.tool_type == 'custom':
+            tool.tool_type = 'function'
+            tool.parameters = {
+                'type': 'object',
+                'properties': {
+                    'input': {
+                        'type': 'string',
+                        'description': '自定义工具的完整原始输入文本。',
+                    },
+                },
+                'required': ['input'],
+                'additionalProperties': False,
+            }
+
+    for message in request.messages:
+        for block in message.blocks:
+            if isinstance(block, ToolCallBlock) and (
+                block.tool_type == 'custom' or block.name in names
+            ):
+                block.arguments = _wrap_custom_tool_input(block.arguments)
+                block.tool_type = 'function'
+            elif isinstance(block, ToolResultBlock) and block.tool_type == 'custom':
+                block.tool_type = 'function'
+    return names
+
+
+@dataclass
+class CustomToolStreamRestoreState:
+    """跨 SSE chunk 记忆 custom tool 的名称与 IR index。"""
+
+    names: set[str]
+    indexes: set[int] = field(default_factory=set)
+    pending_starts: dict[int, ToolCallStart] = field(default_factory=dict)
+    pending_deltas: dict[int, list[ToolCallDelta]] = field(default_factory=dict)
+    arguments: dict[int, str] = field(default_factory=dict)
+
+
+def restore_custom_tool_events(
+    events: list[StreamEvent],
+    state: CustomToolStreamRestoreState,
+) -> list[StreamEvent]:
+    """恢复「已降级为 function」的 custom tool 流式语义，并处理名称延迟到达。
+
+    state.names 为空时应直接透传（例如 Responses 原生 custom 路径），避免吞掉增量 delta。
+    """
+    if not state.names:
+        return events
+
+    restored: list[StreamEvent] = []
+    for event in events:
+        if isinstance(event, ToolCallStart):
+            if event.name in state.names:
+                event.tool_type = 'custom'
+                state.indexes.add(event.index)
+                state.arguments[event.index] = ''
+                restored.append(event)
+            elif event.name:
+                restored.append(event)
+            else:
+                state.pending_starts[event.index] = event
+            continue
+
+        if isinstance(event, ToolCallDelta):
+            state.arguments[event.index] = state.arguments.get(event.index, '') + event.arguments
+            if event.index in state.indexes:
+                continue
+            if event.index in state.pending_starts:
+                state.pending_deltas.setdefault(event.index, []).append(event)
+                continue
+
+        if isinstance(event, ToolCallEnd):
+            pending = state.pending_starts.pop(event.index, None)
+            pending_deltas = state.pending_deltas.pop(event.index, [])
+            is_custom = event.index in state.indexes or event.name in state.names
+            if is_custom:
+                event.arguments = unwrap_custom_tool_input(
+                    event.arguments or state.arguments.get(event.index, '')
+                )
+                event.tool_type = 'custom'
+                state.indexes.add(event.index)
+            state.arguments.pop(event.index, None)
+            if pending is not None:
+                if event.name:
+                    pending.name = event.name
+                if is_custom:
+                    pending.tool_type = 'custom'
+                restored.append(pending)
+            if is_custom:
+                restored.append(ToolCallDelta(index=event.index, arguments=event.arguments))
+            elif pending is not None:
+                restored.extend(pending_deltas)
+            restored.append(event)
+            continue
+
+        restored.append(event)
+    return restored
+
+
+def restore_custom_tool_calls(request: IRRequest, custom_names: set[str]) -> None:
+    """恢复已存在于请求历史中的 custom tool 调用与结果语义。"""
+    if not custom_names:
+        return
+    custom_call_ids = {
+        block.id
+        for message in request.messages
+        for block in message.blocks
+        if isinstance(block, ToolCallBlock) and block.name in custom_names and block.id
+    }
+    for message in request.messages:
+        for block in message.blocks:
+            if isinstance(block, ToolCallBlock) and block.name in custom_names:
+                block.tool_type = 'custom'
+            elif isinstance(block, ToolResultBlock):
+                block.tool_type = 'custom' if block.call_id in custom_call_ids else 'function'
+
+
+def unwrap_custom_tool_input(arguments: str) -> str:
+    """将严格的 {"input": "..."} 参数还原为 custom tool 原始文本。"""
+    try:
+        parsed = json.loads(arguments)
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return arguments
+    if (
+        isinstance(parsed, dict)
+        and set(parsed) == {'input'}
+        and isinstance(parsed['input'], str)
+    ):
+        return parsed['input']
+    return arguments
+
+
+def _wrap_custom_tool_input(arguments: str) -> str:
+    """把 custom tool 原始文本幂等包装成普通 function tool 的 JSON 参数。"""
+    if not isinstance(arguments, str):
+        arguments = dump_arguments(arguments)
+    # 已是降级包装则原样返回，避免把自由文本或其它 JSON 二次嵌套错乱
+    if unwrap_custom_tool_input(arguments) != arguments:
+        return arguments
+    return json.dumps({'input': arguments}, ensure_ascii=False)
 
 
 # ═══════════════════════════════════════════════════════════
@@ -97,6 +264,8 @@ def parse_tool_choice(tool_choice: Any) -> Any:
 
 def fix_tool_call_block(block: ToolCallBlock) -> None:
     """就地修复 IR 工具调用块的参数（非流式响应路径）。"""
+    if block.tool_type == 'custom':
+        return
     try:
         args = json.loads(block.arguments) if isinstance(block.arguments, str) else block.arguments
     except (json.JSONDecodeError, ValueError):
@@ -197,7 +366,7 @@ def parse_arguments_dict(arguments: Any) -> dict[str, Any]:
 
 
 def dump_arguments(arguments: Any) -> str:
-    """将工具参数统一序列化为 JSON 字符串。"""
+    """将工具参数统一序列化为字符串，保留 custom tool 的原始文本 input。"""
     if isinstance(arguments, str):
         return arguments
     try:
