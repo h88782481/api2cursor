@@ -158,10 +158,11 @@
     <div class="field">
       <label class="switch-row">
         <input type="checkbox" id="mFastMode">
-        <span>开启 Fast 模式</span>
+        <span>强制开启 Fast 模式</span>
       </label>
       <div class="hint">
-        仅 Chat / Responses 上游生效，发送 <code>service_tier: "fast"</code>。可能产生额外费用，且需要上游支持。
+        Cursor 自己开启 Fast 时会自动透传。此开关会忽略 Cursor 当前选择，始终为 Chat / Responses 上游发送
+        <code>service_tier: "priority"</code>。可能产生额外费用，且需要上游支持。
       </div>
     </div>
     <div class="field">

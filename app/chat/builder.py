@@ -62,12 +62,7 @@ class UpstreamRequestBuilder:
         body, warnings = self.rosetta.request_to(route.protocol, request)
         warnings = [*injection.warnings, *warnings]
         _apply_reasoning_wire(body, route)
-        if route.fast_mode and route.protocol in ('chat', 'responses'):
-            body['service_tier'] = 'fast'
-        if route.fast_mode and route.protocol not in ('chat', 'responses'):
-            warnings.append(
-                f'Fast 模式不适用于 {route.protocol} 上游，已忽略',
-            )
+        _apply_service_tier(body, route, payload.get('service_tier'), warnings)
         wire = spec(route.protocol)
         wire.prepare_body(body)
         _apply_overrides(body, route.body_overrides)
@@ -98,6 +93,23 @@ def _apply_reasoning_wire(body: dict[str, Any], route: Route) -> None:
         body.setdefault('output_config', {})['effort'] = route.thinking_level
     else:
         body['thinkingConfig'] = {'thinkingLevel': route.thinking_level}
+
+
+def _apply_service_tier(
+    body: dict[str, Any],
+    route: Route,
+    client_tier: Any,
+    warnings: list[str],
+) -> None:
+    tier = 'priority' if route.fast_mode else client_tier
+    if not isinstance(tier, str) or not tier:
+        return
+    if route.protocol in ('chat', 'responses'):
+        body['service_tier'] = tier
+    elif tier in ('fast', 'priority'):
+        warnings.append(
+            f'Cursor 请求了 Fast 模式，但 {route.protocol} 上游不支持，已忽略',
+        )
 
 
 def _apply_reasoning(request: dict[str, Any], route: Route) -> None:
