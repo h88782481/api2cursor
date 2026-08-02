@@ -55,11 +55,19 @@ class UpstreamRequestBuilder:
         stream = bool(payload.get('stream'))
         request['model'] = route.upstream_model
         request['stream'] = {'enabled': stream, 'include_usage': True}
+        _apply_reasoning(request, route)
         if route.protocol not in ('chat', 'responses'):
             request.pop('provider_extensions', None)
 
         body, warnings = self.rosetta.request_to(route.protocol, request)
         warnings = [*injection.warnings, *warnings]
+        _apply_gemini_reasoning(body, route)
+        if route.fast_mode and route.protocol in ('chat', 'responses'):
+            body['service_tier'] = 'fast'
+        if route.fast_mode and route.protocol not in ('chat', 'responses'):
+            warnings.append(
+                f'Fast 模式不适用于 {route.protocol} 上游，已忽略',
+            )
         wire = spec(route.protocol)
         wire.prepare_body(body)
         _apply_overrides(body, route.body_overrides)
@@ -77,6 +85,22 @@ class UpstreamRequestBuilder:
             headers=headers,
             url=wire.url(route.base_url, route.upstream_model, stream),
         )
+
+
+def _apply_gemini_reasoning(body: dict[str, Any], route: Route) -> None:
+    if route.protocol != 'gemini' or route.thinking_level == 'default':
+        return
+    body['thinkingConfig'] = {
+        'thinkingLevel': route.thinking_level,
+    }
+
+
+def _apply_reasoning(request: dict[str, Any], route: Route) -> None:
+    if route.thinking_level != 'default' and route.protocol != 'gemini':
+        request['reasoning'] = {
+            'mode': 'auto',
+            'effort': route.thinking_level,
+        }
 
 
 def _apply_overrides(payload: dict[str, Any], overrides: dict[str, Any]) -> None:

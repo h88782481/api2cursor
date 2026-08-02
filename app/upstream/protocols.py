@@ -56,9 +56,16 @@ class WireSpec:
             'tool_config': 'toolConfig',
             'response_mime_type': 'responseMimeType',
             'response_schema': 'responseSchema',
+            'thinking_config': 'thinkingConfig',
         }.items():
             if source in body:
                 body[target] = body.pop(source)
+        thinking = body.get('thinkingConfig')
+        if isinstance(thinking, dict):
+            if 'thinking_level' in thinking:
+                thinking['thinkingLevel'] = thinking.pop('thinking_level')
+            if 'thinking_budget' in thinking:
+                thinking['thinkingBudget'] = thinking.pop('thinking_budget')
         return body
 
 

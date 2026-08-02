@@ -10,6 +10,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from ..protocol import ConfiguredProtocol
 
 DebugMode = Literal['off', 'simple', 'verbose']
+ThinkingLevel = Literal['default', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
 InjectionMode = Literal['prepend', 'append', 'replace']
 InstructionTarget = str
 
@@ -64,6 +65,8 @@ class InstructionSettings(BaseModel):
 class RequestSettings(BaseModel):
     model_config = ConfigDict(extra='forbid')
 
+    thinking_level: ThinkingLevel = 'default'
+    fast_mode: bool = False
     body: dict[str, Any] = Field(default_factory=dict)
     headers: dict[str, Any] = Field(default_factory=dict)
 

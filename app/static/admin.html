@@ -137,6 +137,34 @@
       </div>
     </div>
     <div class="field">
+      <label>思考等级</label>
+      <div class="input-wrap">
+        <select id="mThinkingLevel">
+          <option value="default">模型默认</option>
+          <option value="minimal">Minimal（最少）</option>
+          <option value="low">Low（低）</option>
+          <option value="medium">Medium（中）</option>
+          <option value="high">High（高）</option>
+          <option value="xhigh">XHigh（很高）</option>
+          <option value="max">Max（最高）</option>
+        </select>
+      </div>
+      <div class="hint">
+        自动转换为 Chat 的 <code>reasoning_effort</code>、Responses 的 <code>reasoning.effort</code>、
+        Messages 的 <code>output_config.effort</code> 或 Gemini 的 <code>thinkingConfig.thinkingLevel</code>。
+        具体可用等级由上游模型决定；不支持所选等级时，上游会拒绝请求。
+      </div>
+    </div>
+    <div class="field">
+      <label class="switch-row">
+        <input type="checkbox" id="mFastMode">
+        <span>开启 Fast 模式</span>
+      </label>
+      <div class="hint">
+        仅 Chat / Responses 上游生效，发送 <code>service_tier: "fast"</code>。可能产生额外费用，且需要上游支持。
+      </div>
+    </div>
+    <div class="field">
       <label>自定义指令 <span style="color:var(--muted)">（可选，按 Cursor 方言分别配置）</span></label>
       <div class="hint" style="margin-bottom:12px">
         只改写 system 提示词。目标可选整段 system，或某个预设 XML 块；覆盖模式仅替换块内文，保留标签。
@@ -197,10 +225,10 @@
     </div>
     <div class="field">
       <label>Body 修改 <span style="color:var(--muted)">（可选，JSON 格式）</span></label>
-      <div class="input-wrap"><textarea id="mBodyMods" rows="3" placeholder='例: {"reasoning_effort": "high", "stream_options": null}' style="resize:vertical;min-height:60px;font-family:Consolas,Monaco,monospace;font-size:13px"></textarea></div>
+      <div class="input-wrap"><textarea id="mBodyMods" rows="3" placeholder='例: {"stream_options": null}' style="resize:vertical;min-height:60px;font-family:Consolas,Monaco,monospace;font-size:13px"></textarea></div>
       <div class="hint">
         对转发到上游的请求体做字段级增删改。值为 <code>null</code> 表示删除该字段，其余为设置/覆盖。<br>
-        适用场景：注入 <code>reasoning_effort</code>、删除上游不支持的 <code>stream_options</code> 等。
+        适用场景：删除上游不支持的 <code>stream_options</code>，或设置未提供专用控件的字段。
       </div>
     </div>
     <div class="field">

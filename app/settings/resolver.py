@@ -7,7 +7,7 @@ from typing import Any
 
 from ..protocol import ConfiguredProtocol, WireProtocol
 from .repository import SettingsRepository
-from .schema import InstructionSettings, env
+from .schema import InstructionSettings, ThinkingLevel, env
 
 
 @dataclass(frozen=True, slots=True)
@@ -18,6 +18,8 @@ class Route:
     base_url: str
     api_key: str
     instructions: InstructionSettings = field(default_factory=InstructionSettings)
+    thinking_level: ThinkingLevel = 'default'
+    fast_mode: bool = False
     body_overrides: dict[str, Any] = field(default_factory=dict)
     header_overrides: dict[str, Any] = field(default_factory=dict)
 
@@ -57,6 +59,8 @@ class RouteResolver:
                 if mapping
                 else InstructionSettings()
             ),
+            thinking_level=mapping.request.thinking_level if mapping else 'default',
+            fast_mode=mapping.request.fast_mode if mapping else False,
             body_overrides=dict(mapping.request.body) if mapping else {},
             header_overrides=dict(mapping.request.headers) if mapping else {},
         )

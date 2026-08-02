@@ -92,6 +92,8 @@ git push main v1.0.0   # 推送标签即触发自动构建发布
 - **上游模型名** — 发送到中转站的实际模型名
 - **中转站接收格式** — `auto`（按上游模型名判断）/ `chat` / `messages` / `responses` / `gemini`
 - **自定义地址/密钥** — 可选，覆盖全局设置，实现分流到不同中转站
+- **思考等级** — 可选 `minimal` / `low` / `medium` / `high` / `xhigh` / `max`，按上游协议转换为对应的 reasoning/thinking 字段；具体可用等级取决于模型，不支持时上游会拒绝请求
+- **Fast 模式** — 为 Chat / Responses 请求设置 `service_tier: "fast"`；需要上游支持，且可能产生额外费用
 - **自定义指令** — 按 Cursor 双方言（function / custom_grammar）分别配置，只改写 system 提示词
   - 目标：整段 system，或预设 XML 块（如 `tone_and_style`、`epistemic_rigor`）
   - 模式：前置 / 后置 / 覆盖（覆盖块时只替换块内文，保留标签）

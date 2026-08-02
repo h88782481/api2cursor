@@ -292,6 +292,7 @@ async function loadMappings() {
   el.innerHTML = '<div class="mapping-list">' + keys.map(name => {
     const m = mappings[name];
     const upstreamFmt = m.upstream_protocol || 'auto';
+    const thinkingLevel = m.thinking_level || 'default';
     const hasOverride = m.target_url || m.api_key;
     const hasInstructions = hasInstructionText(m.instructions);
     const hasBodyMods = m.body_modifications && Object.keys(m.body_modifications).length > 0;
@@ -305,6 +306,8 @@ async function loadMappings() {
         <div class="mapping-meta">
           ${formatTag(upstreamFmt, '中转站: ')}
           ${hasOverride ? '<span class="tag tag-override">自定义地址</span>' : ''}
+          ${thinkingLevel !== 'default' ? `<span class="tag tag-thinking">思考: ${esc(thinkingLevel)}</span>` : ''}
+          ${m.fast_mode ? '<span class="tag tag-fast">Fast</span>' : ''}
           ${hasInstructions ? '<span class="tag tag-instructions">自定义指令</span>' : ''}
           ${statusTag}
           ${hasBodyMods ? '<span class="tag tag-mods">Body修改</span>' : ''}
@@ -347,6 +350,8 @@ async function openAddModal() {
   document.getElementById('mUpstreamProtocol').value = 'auto';
   document.getElementById('mUrl').value = '';
   document.getElementById('mKey').value = '';
+  document.getElementById('mThinkingLevel').value = 'default';
+  document.getElementById('mFastMode').checked = false;
   document.getElementById('mBodyMods').value = '';
   document.getElementById('mHeaderMods').value = '';
   await ensureInstructionBlocks();
@@ -369,6 +374,8 @@ async function openEditModal(name) {
     document.getElementById('mUpstreamProtocol').value = m.upstream_protocol || 'auto';
     document.getElementById('mUrl').value = m.target_url || '';
     document.getElementById('mKey').value = m.api_key || '';
+    document.getElementById('mThinkingLevel').value = m.thinking_level || 'default';
+    document.getElementById('mFastMode').checked = !!m.fast_mode;
     writeDialectRule('function', m.instructions?.function);
     writeDialectRule('custom_grammar', m.instructions?.custom_grammar);
     updateInstructionWarning();
@@ -411,6 +418,8 @@ async function saveMapping() {
     upstream_protocol: document.getElementById('mUpstreamProtocol').value,
     target_url: document.getElementById('mUrl').value.trim(),
     api_key: document.getElementById('mKey').value.trim(),
+    thinking_level: document.getElementById('mThinkingLevel').value,
+    fast_mode: document.getElementById('mFastMode').checked,
     instructions: {
       function: readDialectRule('function'),
       custom_grammar: readDialectRule('custom_grammar'),

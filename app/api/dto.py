@@ -13,6 +13,7 @@ from ..settings.schema import (
     InstructionSettings,
     ModelMapping,
     RequestSettings,
+    ThinkingLevel,
     UpstreamSettings,
 )
 
@@ -33,6 +34,8 @@ class AdminMapping(BaseModel):
     upstream_protocol: ConfiguredProtocol = 'auto'
     target_url: str = ''
     api_key: str = ''
+    thinking_level: ThinkingLevel = 'default'
+    fast_mode: bool = False
     instructions: InstructionSettings = Field(default_factory=InstructionSettings)
     body_modifications: dict[str, Any] = Field(default_factory=dict)
     header_modifications: dict[str, Any] = Field(default_factory=dict)
@@ -57,6 +60,8 @@ class AdminMapping(BaseModel):
             ),
             instructions=self.instructions,
             request=RequestSettings(
+                thinking_level=self.thinking_level,
+                fast_mode=self.fast_mode,
                 body=self.body_modifications,
                 headers=self.header_modifications,
             ),
@@ -69,6 +74,8 @@ class AdminMapping(BaseModel):
             upstream_protocol=mapping.upstream.protocol,
             target_url=mapping.upstream.base_url,
             api_key=mapping.upstream.api_key,
+            thinking_level=mapping.request.thinking_level,
+            fast_mode=mapping.request.fast_mode,
             instructions=mapping.instructions,
             body_modifications=mapping.request.body,
             header_modifications=mapping.request.headers,
