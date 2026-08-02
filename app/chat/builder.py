@@ -61,7 +61,7 @@ class UpstreamRequestBuilder:
 
         body, warnings = self.rosetta.request_to(route.protocol, request)
         warnings = [*injection.warnings, *warnings]
-        _apply_gemini_reasoning(body, route)
+        _apply_reasoning_wire(body, route)
         if route.fast_mode and route.protocol in ('chat', 'responses'):
             body['service_tier'] = 'fast'
         if route.fast_mode and route.protocol not in ('chat', 'responses'):
@@ -87,12 +87,17 @@ class UpstreamRequestBuilder:
         )
 
 
-def _apply_gemini_reasoning(body: dict[str, Any], route: Route) -> None:
-    if route.protocol != 'gemini' or route.thinking_level == 'default':
+def _apply_reasoning_wire(body: dict[str, Any], route: Route) -> None:
+    if route.thinking_level == 'default':
         return
-    body['thinkingConfig'] = {
-        'thinkingLevel': route.thinking_level,
-    }
+    if route.protocol == 'chat':
+        body['reasoning_effort'] = route.thinking_level
+    elif route.protocol == 'responses':
+        body.setdefault('reasoning', {})['effort'] = route.thinking_level
+    elif route.protocol == 'messages':
+        body.setdefault('output_config', {})['effort'] = route.thinking_level
+    else:
+        body['thinkingConfig'] = {'thinkingLevel': route.thinking_level}
 
 
 def _apply_reasoning(request: dict[str, Any], route: Route) -> None:
