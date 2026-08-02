@@ -1,6 +1,11 @@
 const API = '';
 let authKey = '';
 let editingName = null;
+let instructionBlocks = {
+  function: [],
+  custom_grammar: [],
+};
+let instructionStatuses = {};
 
 const FORMAT_LABELS = {
   auto: '自动',
@@ -15,6 +20,11 @@ const FORMAT_TAG_CLASSES = {
   responses: 'tag-responses',
   messages: 'tag-messages',
   gemini: 'tag-gemini',
+};
+
+const DIALECT_UI = {
+  function: { target: 'mFnTarget', hint: 'mFnTargetHint', text: 'mFnText', mode: 'mFnMode' },
+  custom_grammar: { target: 'mCgTarget', hint: 'mCgTargetHint', text: 'mCgText', mode: 'mCgMode' },
 };
 
 function togglePwd(id) {
@@ -51,7 +61,7 @@ async function api(path, opts = {}) {
 // ─── 登录 ───────────────────────────────────────────
 async function doLogin() {
   const key = document.getElementById('loginKey').value.trim();
-  if (!key) { toast('请输入密钥', false); return; }
+  if (!key) { toast('请填写密钥', false); return; }
   try {
     const r = await api('/api/admin/login', { method: 'POST', body: JSON.stringify({ key }) });
     if (r.ok) {
@@ -82,12 +92,72 @@ async function loadDashboard() {
     document.getElementById('debugMode').value = s.debug_mode || 'off';
     document.getElementById('envUrl').textContent = s.env_target_url ? '环境变量: ' + s.env_target_url : '';
     document.getElementById('envKey').textContent = s.env_api_key ? '环境变量: (已配置)' : '环境变量: (未设置)';
+    await ensureInstructionBlocks();
     await loadMappings();
     checkHealth();
     loadStats();
   } catch (e) {
     toast('加载设置失败: ' + e.message, false);
   }
+}
+
+async function ensureInstructionBlocks() {
+  if (instructionBlocks.function.length && instructionBlocks.custom_grammar.length) return;
+  instructionBlocks = await api('/api/admin/instruction-blocks');
+  fillTargetSelect('function');
+  fillTargetSelect('custom_grammar');
+}
+
+function fillTargetSelect(dialect) {
+  const ui = DIALECT_UI[dialect];
+  const select = document.getElementById(ui.target);
+  const blocks = instructionBlocks[dialect] || [];
+  select.innerHTML = blocks.map(block => {
+    const short = block.description.length > 36
+      ? block.description.slice(0, 36) + '…'
+      : block.description;
+    const label = block.id === 'all'
+      ? `${block.label} — ${short}`
+      : `${block.label} — ${short}`;
+    return `<option value="${esc(block.id)}">${esc(label)}</option>`;
+  }).join('');
+  updateBlockHint(dialect);
+}
+
+function updateBlockHint(dialect) {
+  const ui = DIALECT_UI[dialect];
+  const select = document.getElementById(ui.target);
+  const hint = document.getElementById(ui.hint);
+  const blocks = instructionBlocks[dialect] || [];
+  const block = blocks.find(item => item.id === select.value) || blocks[0];
+  const selected = select.selectedOptions[0];
+  hint.textContent = selected?.dataset.invalid
+    ? '当前 Cursor 提示词可能已不包含此块，请重新选择注入目标。'
+    : (block ? block.description : '');
+}
+
+function copyDialectRule(source, target) {
+  writeDialectRule(target, readDialectRule(source));
+  updateInstructionWarning();
+}
+
+function dangerousInstructionRules() {
+  return ['function', 'custom_grammar'].filter(dialect => {
+    const rule = readDialectRule(dialect);
+    return rule.text.trim() && rule.target === 'all' && rule.mode === 'replace';
+  });
+}
+
+function updateInstructionWarning() {
+  const warning = document.getElementById('mInstructionWarning');
+  const dangerous = dangerousInstructionRules();
+  if (!dangerous.length) {
+    warning.style.display = 'none';
+    warning.textContent = '';
+    return;
+  }
+  warning.style.display = 'block';
+  warning.textContent = '高风险：覆盖“全部”会替换整个 Cursor system，可能导致 Agent 工具和编辑规则失效。';
 }
 
 async function loadStats() {
@@ -161,8 +231,56 @@ function formatTag(fmt, prefix) {
   return '<span class="tag ' + cls + '">' + esc(prefix + label) + '</span>';
 }
 
+function hasInstructionText(instructions) {
+  if (!instructions) return false;
+  return !!(instructions.function?.text || instructions.custom_grammar?.text);
+}
+
+function defaultDialectRule() {
+  return { text: '', target: 'all', mode: 'prepend' };
+}
+
+function readDialectRule(dialect) {
+  const ui = DIALECT_UI[dialect];
+  return {
+    text: document.getElementById(ui.text).value,
+    target: document.getElementById(ui.target).value || 'all',
+    mode: document.getElementById(ui.mode).value || 'prepend',
+  };
+}
+
+function writeDialectRule(dialect, rule) {
+  const ui = DIALECT_UI[dialect];
+  const value = rule || defaultDialectRule();
+  document.getElementById(ui.text).value = value.text || '';
+  const target = value.target || 'all';
+  const select = document.getElementById(ui.target);
+  if (![...select.options].some(opt => opt.value === target)) {
+    const option = document.createElement('option');
+    option.value = target;
+    option.textContent = `${target} — 当前 Cursor 可能已移除此块`;
+    option.dataset.invalid = 'true';
+    select.appendChild(option);
+    select.value = target;
+  } else {
+    select.value = target;
+  }
+  document.getElementById(ui.mode).value = value.mode || 'prepend';
+  updateBlockHint(dialect);
+  updateInstructionWarning();
+}
+
+function resetInstructionForm() {
+  writeDialectRule('function', defaultDialectRule());
+  writeDialectRule('custom_grammar', defaultDialectRule());
+}
+
 async function loadMappings() {
-  const mappings = await api('/api/admin/mappings');
+  const [mappings, statuses] = await Promise.all([
+    api('/api/admin/mappings'),
+    api('/api/admin/instruction-status'),
+  ]);
+  instructionStatuses = statuses || {};
   const el = document.getElementById('mappingList');
   const keys = Object.keys(mappings);
 
@@ -175,9 +293,10 @@ async function loadMappings() {
     const m = mappings[name];
     const upstreamFmt = m.upstream_protocol || 'auto';
     const hasOverride = m.target_url || m.api_key;
-    const hasInstructions = !!m.custom_instructions;
+    const hasInstructions = hasInstructionText(m.instructions);
     const hasBodyMods = m.body_modifications && Object.keys(m.body_modifications).length > 0;
     const hasHeaderMods = m.header_modifications && Object.keys(m.header_modifications).length > 0;
+    const statusTag = instructionStatusTag(name, m.instructions);
     return `<div class="mapping-item">
       <div class="mapping-top">
         <span class="mapping-name">${esc(name)}</span>
@@ -187,6 +306,7 @@ async function loadMappings() {
           ${formatTag(upstreamFmt, '中转站: ')}
           ${hasOverride ? '<span class="tag tag-override">自定义地址</span>' : ''}
           ${hasInstructions ? '<span class="tag tag-instructions">自定义指令</span>' : ''}
+          ${statusTag}
           ${hasBodyMods ? '<span class="tag tag-mods">Body修改</span>' : ''}
           ${hasHeaderMods ? '<span class="tag tag-mods">Header修改</span>' : ''}
         </div>
@@ -199,10 +319,26 @@ async function loadMappings() {
   }).join('') + '</div>';
 }
 
+function instructionStatusTag(name, instructions) {
+  if (!hasInstructionText(instructions)) return '';
+  const statuses = instructionStatuses[name] || {};
+  const configured = ['function', 'custom_grammar']
+    .filter(dialect => instructions?.[dialect]?.text);
+  const relevant = configured.map(dialect => statuses[dialect]).filter(Boolean);
+  if (relevant.some(status => status.state === 'failed')) {
+    const failed = relevant.find(status => status.state === 'failed');
+    return `<span class="tag tag-warning" title="${esc(failed.message || '')}">注入失败</span>`;
+  }
+  if (relevant.some(status => status.state === 'applied')) {
+    return '<span class="tag tag-ok">注入正常</span>';
+  }
+  return '<span class="tag tag-pending">尚无请求验证</span>';
+}
+
 function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
 
 // ─── 弹窗 ──────────────────────────────────────────
-function openAddModal() {
+async function openAddModal() {
   editingName = null;
   document.getElementById('modalTitle').textContent = '添加模型映射';
   document.getElementById('mName').value = '';
@@ -211,10 +347,11 @@ function openAddModal() {
   document.getElementById('mUpstreamProtocol').value = 'auto';
   document.getElementById('mUrl').value = '';
   document.getElementById('mKey').value = '';
-  document.getElementById('mInstructions').value = '';
-  document.getElementById('mInsPosition').value = 'prepend';
   document.getElementById('mBodyMods').value = '';
   document.getElementById('mHeaderMods').value = '';
+  await ensureInstructionBlocks();
+  resetInstructionForm();
+  updateInstructionWarning();
   document.getElementById('modal').classList.add('active');
 }
 
@@ -222,6 +359,7 @@ async function openEditModal(name) {
   editingName = name;
   document.getElementById('modalTitle').textContent = '编辑模型映射';
   try {
+    await ensureInstructionBlocks();
     const mappings = await api('/api/admin/mappings');
     const m = mappings[name];
     if (!m) { toast('映射未找到', false); return; }
@@ -231,8 +369,9 @@ async function openEditModal(name) {
     document.getElementById('mUpstreamProtocol').value = m.upstream_protocol || 'auto';
     document.getElementById('mUrl').value = m.target_url || '';
     document.getElementById('mKey').value = m.api_key || '';
-    document.getElementById('mInstructions').value = m.custom_instructions || '';
-    document.getElementById('mInsPosition').value = m.instructions_position || 'prepend';
+    writeDialectRule('function', m.instructions?.function);
+    writeDialectRule('custom_grammar', m.instructions?.custom_grammar);
+    updateInstructionWarning();
     document.getElementById('mBodyMods').value = m.body_modifications && Object.keys(m.body_modifications).length ? JSON.stringify(m.body_modifications, null, 2) : '';
     document.getElementById('mHeaderMods').value = m.header_modifications && Object.keys(m.header_modifications).length ? JSON.stringify(m.header_modifications, null, 2) : '';
     document.getElementById('modal').classList.add('active');
@@ -272,11 +411,20 @@ async function saveMapping() {
     upstream_protocol: document.getElementById('mUpstreamProtocol').value,
     target_url: document.getElementById('mUrl').value.trim(),
     api_key: document.getElementById('mKey').value.trim(),
-    custom_instructions: document.getElementById('mInstructions').value,
-    instructions_position: document.getElementById('mInsPosition').value,
+    instructions: {
+      function: readDialectRule('function'),
+      custom_grammar: readDialectRule('custom_grammar'),
+    },
     body_modifications: bodyMods,
     header_modifications: headerMods,
   };
+
+  if (
+    dangerousInstructionRules().length
+    && !confirm('覆盖“全部”会替换整个 Cursor system，可能导致 Agent 工具行为失效。确定继续保存吗？')
+  ) {
+    return;
+  }
 
   try {
     if (editingName) {

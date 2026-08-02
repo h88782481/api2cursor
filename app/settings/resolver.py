@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Any
 
 from ..protocol import ConfiguredProtocol, WireProtocol
 from .repository import SettingsRepository
-from .schema import env
+from .schema import InstructionSettings, env
 
 
 @dataclass(frozen=True, slots=True)
@@ -17,8 +17,7 @@ class Route:
     protocol: WireProtocol
     base_url: str
     api_key: str
-    instructions: str = ''
-    instructions_position: Literal['prepend', 'append'] = 'prepend'
+    instructions: InstructionSettings = field(default_factory=InstructionSettings)
     body_overrides: dict[str, Any] = field(default_factory=dict)
     header_overrides: dict[str, Any] = field(default_factory=dict)
 
@@ -53,8 +52,11 @@ class RouteResolver:
             api_key=(upstream.api_key if upstream else '')
             or global_upstream.api_key
             or env.proxy_api_key,
-            instructions=mapping.instructions.text if mapping else '',
-            instructions_position=mapping.instructions.position if mapping else 'prepend',
+            instructions=(
+                mapping.instructions
+                if mapping
+                else InstructionSettings()
+            ),
             body_overrides=dict(mapping.request.body) if mapping else {},
             header_overrides=dict(mapping.request.headers) if mapping else {},
         )

@@ -137,22 +137,63 @@
       </div>
     </div>
     <div class="field">
-      <label>自定义指令 <span style="color:var(--muted)">（可选）</span></label>
-      <div class="input-wrap"><textarea id="mInstructions" rows="5" placeholder="注入到请求中的自定义系统指令&#10;&#10;Responses 格式 → 写入 instructions 字段（developer 级别）&#10;Chat Completions 格式 → 注入为首条 system 消息&#10;Anthropic 格式 → 写入 system 字段" style="resize:vertical;min-height:80px"></textarea></div>
-      <div class="hint">
-        每个模型可单独配置。指令会被注入到发往上游的请求中，模型会无条件信任该内容。<br>
-        适用场景：自定义人格、解除限制、注入 CTF 环境假设等。
+      <label>自定义指令 <span style="color:var(--muted)">（可选，按 Cursor 方言分别配置）</span></label>
+      <div class="hint" style="margin-bottom:12px">
+        只改写 system 提示词。目标可选整段 system，或某个预设 XML 块；覆盖模式仅替换块内文，保留标签。
       </div>
-    </div>
-    <div class="field">
-      <label>注入位置</label>
-      <div class="input-wrap">
-        <select id="mInsPosition">
-          <option value="prepend">前置（推荐，优先级更高）</option>
-          <option value="append">后置</option>
-        </select>
+      <div class="warning-box" id="mInstructionWarning"></div>
+
+      <div class="ins-dialect">
+        <div class="ins-dialect-head">
+          <div class="ins-dialect-title">Function 方言</div>
+          <button type="button" class="btn btn-ghost btn-xs" onclick="copyDialectRule('custom_grammar','function')">从 Custom grammar 复制</button>
+        </div>
+        <div class="field">
+          <label>注入文案</label>
+          <div class="input-wrap"><textarea id="mFnText" rows="4" placeholder="留空则不对 Function 方言注入" style="resize:vertical;min-height:72px"></textarea></div>
+        </div>
+        <div class="field">
+          <label>注入目标</label>
+          <div class="input-wrap"><select id="mFnTarget" onchange="updateBlockHint('function');updateInstructionWarning()"></select></div>
+          <div class="hint" id="mFnTargetHint"></div>
+        </div>
+        <div class="field">
+          <label>注入模式</label>
+          <div class="input-wrap">
+            <select id="mFnMode" onchange="updateInstructionWarning()">
+              <option value="prepend">前置</option>
+              <option value="append">后置</option>
+              <option value="replace">覆盖</option>
+            </select>
+          </div>
+        </div>
       </div>
-      <div class="hint">前置：自定义指令放在系统提示词最前面，模型优先看到；后置：放在末尾</div>
+
+      <div class="ins-dialect" style="margin-top:16px">
+        <div class="ins-dialect-head">
+          <div class="ins-dialect-title">Custom grammar 方言</div>
+          <button type="button" class="btn btn-ghost btn-xs" onclick="copyDialectRule('function','custom_grammar')">从 Function 复制</button>
+        </div>
+        <div class="field">
+          <label>注入文案</label>
+          <div class="input-wrap"><textarea id="mCgText" rows="4" placeholder="留空则不对 Custom grammar 方言注入" style="resize:vertical;min-height:72px"></textarea></div>
+        </div>
+        <div class="field">
+          <label>注入目标</label>
+          <div class="input-wrap"><select id="mCgTarget" onchange="updateBlockHint('custom_grammar');updateInstructionWarning()"></select></div>
+          <div class="hint" id="mCgTargetHint"></div>
+        </div>
+        <div class="field">
+          <label>注入模式</label>
+          <div class="input-wrap">
+            <select id="mCgMode" onchange="updateInstructionWarning()">
+              <option value="prepend">前置</option>
+              <option value="append">后置</option>
+              <option value="replace">覆盖</option>
+            </select>
+          </div>
+        </div>
+      </div>
     </div>
     <div class="field">
       <label>Body 修改 <span style="color:var(--muted)">（可选，JSON 格式）</span></label>

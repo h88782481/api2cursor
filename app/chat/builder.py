@@ -2,16 +2,18 @@
 
 from __future__ import annotations
 
-import copy
 from dataclasses import dataclass
 from typing import Any
-
-from llm_rosetta.types.ir import IRRequest
 
 from ..settings import Route, RouteResolver
 from ..upstream import spec
 from .cursor import CursorAdapter
 from .exchange import CursorDialect
+from .instructions import (
+    InjectionResult,
+    InstructionStatusTracker,
+    apply_system_injection,
+)
 from .rosetta import Rosetta
 
 
@@ -21,6 +23,7 @@ class PreparedRequest:
     dialect: CursorDialect
     stream: bool
     custom_tools: set[str]
+    injection: InjectionResult
     warnings: list[str]
     body: dict[str, Any]
     headers: dict[str, str]
@@ -33,24 +36,30 @@ class UpstreamRequestBuilder:
         resolver: RouteResolver,
         cursor: CursorAdapter,
         rosetta: Rosetta,
+        instruction_status: InstructionStatusTracker,
     ):
         self.resolver = resolver
         self.cursor = cursor
         self.rosetta = rosetta
+        self.instruction_status = instruction_status
 
     def build(self, payload: dict[str, Any]) -> PreparedRequest:
-        dialect, parsed_request, custom_tools = self.cursor.parse(payload)
+        dialect, request, custom_tools = self.cursor.parse(payload)
         route = self.resolver.resolve(payload['model'])
+        injection = apply_system_injection(
+            request,
+            dialect,
+            route.instructions.for_dialect(dialect),
+        )
+        self.instruction_status.record(route.client_model, injection)
         stream = bool(payload.get('stream'))
-
-        request = copy.deepcopy(parsed_request)
         request['model'] = route.upstream_model
         request['stream'] = {'enabled': stream, 'include_usage': True}
-        _inject_instructions(request, route.instructions, route.instructions_position)
         if route.protocol not in ('chat', 'responses'):
             request.pop('provider_extensions', None)
 
         body, warnings = self.rosetta.request_to(route.protocol, request)
+        warnings = [*injection.warnings, *warnings]
         wire = spec(route.protocol)
         wire.prepare_body(body)
         _apply_overrides(body, route.body_overrides)
@@ -62,25 +71,12 @@ class UpstreamRequestBuilder:
             dialect=dialect,
             stream=stream,
             custom_tools=custom_tools,
+            injection=injection,
             warnings=warnings,
             body=body,
             headers=headers,
             url=wire.url(route.base_url, route.upstream_model, stream),
         )
-
-
-def _inject_instructions(
-    request: IRRequest,
-    custom: str,
-    position: str,
-) -> None:
-    if not custom:
-        return
-    existing = request.get('system_instruction', [])
-    custom_part = {'type': 'text', 'text': custom}
-    request['system_instruction'] = (
-        [*existing, custom_part] if position == 'append' else [custom_part, *existing]
-    )
 
 
 def _apply_overrides(payload: dict[str, Any], overrides: dict[str, Any]) -> None:

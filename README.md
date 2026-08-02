@@ -92,7 +92,10 @@ git push main v1.0.0   # 推送标签即触发自动构建发布
 - **上游模型名** — 发送到中转站的实际模型名
 - **中转站接收格式** — `auto`（按上游模型名判断）/ `chat` / `messages` / `responses` / `gemini`
 - **自定义地址/密钥** — 可选，覆盖全局设置，实现分流到不同中转站
-- **自定义指令** — 注入到上游请求的系统提示词（可选前置/后置）
+- **自定义指令** — 按 Cursor 双方言（function / custom_grammar）分别配置，只改写 system 提示词
+  - 目标：整段 system，或预设 XML 块（如 `tone_and_style`、`epistemic_rigor`）
+  - 模式：前置 / 后置 / 覆盖（覆盖块时只替换块内文，保留标签）
+  - 管理面板显示最近一次请求的注入状态；覆盖整段 system 时会进行风险确认
 - **Body / Header 修改** — 对上游请求做字段级增删改（值为 `null` 删除）
 
 **示例**：在 Cursor 中添加 `claude-sonnet-4-5-20250929`，映射到上游 `gpt-5.4`，中转站接收格式选 `responses`。请求会转换到 `/v1/responses`，响应再统一回编为 Cursor Chat。
@@ -115,7 +118,9 @@ app/
 │   └── admin.py             # 管理面板 + API
 ├── chat/
 │   ├── gateway.py           # 单一 Chat 用例编排
+│   ├── builder.py           # 上游请求构造
 │   ├── cursor.py            # Cursor 双方言边界
+│   ├── instructions.py      # system 提示词注入
 │   ├── rosetta.py           # llm-rosetta 转换门面
 │   ├── streaming.py         # 流式事件回编
 │   └── exchange.py          # 请求上下文与错误

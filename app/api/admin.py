@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, ValidationError
 
+from ..chat.instructions import blocks_as_dicts
 from ..errors import ApiError
 from ..settings import Settings, env
 from .common import read_json_object, require_access
@@ -85,6 +86,34 @@ async def update_settings(request: Request):
     return _save_and_respond(repository, current, '全局设置已更新')
 
 
+# ─── 指令注入块元数据 ─────────────────────────────
+
+
+@admin_api.get('/instruction-blocks')
+async def instruction_blocks():
+    return blocks_as_dicts()
+
+
+@admin_api.get('/instruction-status')
+async def instruction_status(request: Request):
+    settings = request.app.state.settings_repository.read()
+    tracker = request.app.state.instruction_status
+    return {
+        model: {
+            dialect: status
+            for dialect in ('function', 'custom_grammar')
+            if (
+                status := tracker.reconcile(
+                    model,
+                    dialect,
+                    mapping.instructions.for_dialect(dialect),
+                )
+            )
+        }
+        for model, mapping in settings.models.items()
+    }
+
+
 # ─── 模型映射 CRUD ────────────────────────────────
 
 
@@ -100,6 +129,7 @@ async def list_mappings(request: Request):
 @admin_api.post('/mappings')
 async def add_mapping(request: Request):
     data = _validate(AdminMapping, await read_json_object(request))
+    _validate_instruction_targets(data)
     name = data.name.strip()
     if not name:
         raise ApiError('名称不能为空', 'invalid_request_error', 400)
@@ -107,12 +137,14 @@ async def add_mapping(request: Request):
     repository = request.app.state.settings_repository
     current = repository.edit()
     current.models[name] = data.to_mapping(name)
+    request.app.state.instruction_status.clear(name)
     return _save_and_respond(repository, current, f'映射已添加: {name}')
 
 
 @admin_api.put('/mappings/{name:path}')
 async def update_mapping(name: str, request: Request):
     data = _validate(AdminMapping, await read_json_object(request))
+    _validate_instruction_targets(data)
     repository = request.app.state.settings_repository
     current = repository.edit()
     if name not in current.models:
@@ -123,6 +155,7 @@ async def update_mapping(name: str, request: Request):
     if new_name != name:
         del current.models[name]
     current.models[new_name] = entry
+    request.app.state.instruction_status.clear(name, new_name)
     return _save_and_respond(repository, current, f'映射已更新: {name} → {new_name}')
 
 
@@ -132,6 +165,7 @@ async def delete_mapping(name: str, request: Request):
     current = repository.edit()
     if name in current.models:
         del current.models[name]
+        request.app.state.instruction_status.clear(name)
         return _save_and_respond(repository, current, f'映射已删除: {name}')
     return {'ok': True}
 
@@ -155,6 +189,13 @@ def _validate(model: type[T], data: dict[str, Any]) -> T:
         location = '.'.join(str(part) for part in issue['loc'])
         message = f'{location}: {issue["msg"]}' if location else issue['msg']
         raise ApiError(message, 'invalid_request_error', 400) from exc
+
+
+def _validate_instruction_targets(mapping: AdminMapping) -> None:
+    try:
+        mapping.validate_targets()
+    except ValueError as exc:
+        raise ApiError(str(exc), 'invalid_request_error', 400) from exc
 
 
 def _save_and_respond(repository, data: Settings, log_message: str) -> Any:

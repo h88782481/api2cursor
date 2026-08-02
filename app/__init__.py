@@ -13,6 +13,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from .chat.gateway import ChatGateway
+from .chat.instructions import InstructionStatusTracker
 from .chat.rosetta import Rosetta
 from .errors import ApiError
 from .observability import RequestLogger, UsageTracker
@@ -38,6 +39,7 @@ async def _lifespan(app: FastAPI):
             Rosetta(),
             app.state.request_log,
             app.state.usage_tracker,
+            app.state.instruction_status,
         )
         try:
             yield
@@ -61,6 +63,7 @@ def create_app() -> FastAPI:
     app.state.route_resolver = RouteResolver(repository)
     app.state.usage_tracker = UsageTracker()
     app.state.request_log = RequestLogger(repository)
+    app.state.instruction_status = InstructionStatusTracker()
     app.add_middleware(
         CORSMiddleware,
         allow_origins=['*'],

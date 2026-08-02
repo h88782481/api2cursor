@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from ..chat.instructions import valid_targets
 from ..protocol import ConfiguredProtocol
 from ..settings.schema import (
     DebugMode,
@@ -32,10 +33,19 @@ class AdminMapping(BaseModel):
     upstream_protocol: ConfiguredProtocol = 'auto'
     target_url: str = ''
     api_key: str = ''
-    custom_instructions: str = ''
-    instructions_position: Literal['prepend', 'append'] = 'prepend'
+    instructions: InstructionSettings = Field(default_factory=InstructionSettings)
     body_modifications: dict[str, Any] = Field(default_factory=dict)
     header_modifications: dict[str, Any] = Field(default_factory=dict)
+
+    def validate_targets(self) -> None:
+        for dialect in ('function', 'custom_grammar'):
+            rule = self.instructions.for_dialect(dialect)
+            if rule.text and rule.target not in valid_targets(dialect):
+                raise ValueError(f'instructions.{dialect}.target 无效: {rule.target}')
+            if rule.text and rule.target != 'all' and f'</{rule.target}>' in rule.text:
+                raise ValueError(
+                    f'instructions.{dialect}.text 不能包含 </{rule.target}>',
+                )
 
     def to_mapping(self, default_name: str) -> ModelMapping:
         return ModelMapping(
@@ -45,10 +55,7 @@ class AdminMapping(BaseModel):
                 base_url=self.target_url,
                 api_key=self.api_key,
             ),
-            instructions=InstructionSettings(
-                text=self.custom_instructions,
-                position=self.instructions_position,
-            ),
+            instructions=self.instructions,
             request=RequestSettings(
                 body=self.body_modifications,
                 headers=self.header_modifications,
@@ -57,13 +64,12 @@ class AdminMapping(BaseModel):
 
     @classmethod
     def from_mapping(cls, mapping: ModelMapping) -> AdminMapping:
-        return cls(
+        return cls.model_construct(
             upstream_model=mapping.upstream.model,
             upstream_protocol=mapping.upstream.protocol,
             target_url=mapping.upstream.base_url,
             api_key=mapping.upstream.api_key,
-            custom_instructions=mapping.instructions.text,
-            instructions_position=mapping.instructions.position,
+            instructions=mapping.instructions,
             body_modifications=mapping.request.body,
             header_modifications=mapping.request.headers,
         )

@@ -15,6 +15,7 @@ from ..upstream import UpstreamClient
 from .builder import PreparedRequest, UpstreamRequestBuilder
 from .cursor import CursorAdapter
 from .exchange import Exchange
+from .instructions import InstructionStatusTracker
 from .rosetta import Rosetta
 from .streaming import StreamBridge
 
@@ -30,11 +31,17 @@ class ChatGateway:
         rosetta: Rosetta,
         request_log: RequestLogger,
         usage: UsageTracker,
+        instruction_status: InstructionStatusTracker,
     ):
         self.upstream = upstream
         self.rosetta = rosetta
         self.cursor = CursorAdapter(rosetta)
-        self.builder = UpstreamRequestBuilder(resolver, self.cursor, rosetta)
+        self.builder = UpstreamRequestBuilder(
+            resolver,
+            self.cursor,
+            rosetta,
+            instruction_status,
+        )
         self.streams = StreamBridge(rosetta, self.cursor)
         self.request_log = request_log
         self.usage = usage
@@ -70,6 +77,14 @@ class ChatGateway:
             dialect=prepared.dialect,
         )
         self.request_log.warnings(exchange.log, prepared.warnings)
+        if prepared.injection.state == 'failed':
+            logger.warning(
+                '指令注入失败: model=%s dialect=%s target=%s message=%s',
+                prepared.route.client_model,
+                prepared.dialect,
+                prepared.injection.target,
+                prepared.injection.message,
+            )
         self.request_log.upstream_request(exchange.log, prepared.body, prepared.headers)
         self.request_log.debug(
             'chat',
