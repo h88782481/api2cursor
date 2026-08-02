@@ -43,9 +43,7 @@ async function api(path, opts = {}) {
   }
   const data = await res.json();
   if (!res.ok) {
-    const e = data.error;
-    const msg = (typeof e === 'object' && e !== null) ? (e.message || JSON.stringify(e)) : (e || data.message || 'HTTP ' + res.status);
-    throw new Error(msg);
+    throw new Error(data.error?.message || 'HTTP ' + res.status);
   }
   return data;
 }
@@ -175,9 +173,7 @@ async function loadMappings() {
 
   el.innerHTML = '<div class="mapping-list">' + keys.map(name => {
     const m = mappings[name];
-    const clientFmt = m.client_format || 'auto';
-    const upstreamFmt = m.upstream_format || 'auto';
-    const passthrough = clientFmt !== 'auto' && clientFmt === upstreamFmt;
+    const upstreamFmt = m.upstream_protocol || 'auto';
     const hasOverride = m.target_url || m.api_key;
     const hasInstructions = !!m.custom_instructions;
     const hasBodyMods = m.body_modifications && Object.keys(m.body_modifications).length > 0;
@@ -188,9 +184,7 @@ async function loadMappings() {
         <span class="mapping-arrow">&rarr;</span>
         <span class="mapping-upstream">${esc(m.upstream_model || name)}</span>
         <div class="mapping-meta">
-          ${formatTag(clientFmt, 'Cursor: ')}
           ${formatTag(upstreamFmt, '中转站: ')}
-          ${passthrough ? '<span class="tag tag-passthrough">透传</span>' : ''}
           ${hasOverride ? '<span class="tag tag-override">自定义地址</span>' : ''}
           ${hasInstructions ? '<span class="tag tag-instructions">自定义指令</span>' : ''}
           ${hasBodyMods ? '<span class="tag tag-mods">Body修改</span>' : ''}
@@ -214,8 +208,7 @@ function openAddModal() {
   document.getElementById('mName').value = '';
   document.getElementById('mName').disabled = false;
   document.getElementById('mUpstream').value = '';
-  document.getElementById('mClientFormat').value = 'auto';
-  document.getElementById('mUpstreamFormat').value = 'auto';
+  document.getElementById('mUpstreamProtocol').value = 'auto';
   document.getElementById('mUrl').value = '';
   document.getElementById('mKey').value = '';
   document.getElementById('mInstructions').value = '';
@@ -235,8 +228,7 @@ async function openEditModal(name) {
     document.getElementById('mName').value = name;
     document.getElementById('mName').disabled = false;
     document.getElementById('mUpstream').value = m.upstream_model || '';
-    document.getElementById('mClientFormat').value = m.client_format || 'auto';
-    document.getElementById('mUpstreamFormat').value = m.upstream_format || 'auto';
+    document.getElementById('mUpstreamProtocol').value = m.upstream_protocol || 'auto';
     document.getElementById('mUrl').value = m.target_url || '';
     document.getElementById('mKey').value = m.api_key || '';
     document.getElementById('mInstructions').value = m.custom_instructions || '';
@@ -277,8 +269,7 @@ async function saveMapping() {
   const payload = {
     name,
     upstream_model: upstream,
-    client_format: document.getElementById('mClientFormat').value,
-    upstream_format: document.getElementById('mUpstreamFormat').value,
+    upstream_protocol: document.getElementById('mUpstreamProtocol').value,
     target_url: document.getElementById('mUrl').value.trim(),
     api_key: document.getElementById('mKey').value.trim(),
     custom_instructions: document.getElementById('mInstructions').value,

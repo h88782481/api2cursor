@@ -13,7 +13,7 @@ logging.basicConfig(
 )
 
 from app import create_app
-from app.config import env
+from app.settings import env
 
 app = create_app()
 

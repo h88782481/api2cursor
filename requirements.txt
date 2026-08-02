@@ -2,3 +2,4 @@ fastapi>=0.115
 uvicorn[standard]>=0.30
 httpx>=0.27
 pydantic-settings>=2.4
+llm-rosetta==0.7.3

@@ -76,8 +76,7 @@
         <button class="btn btn-green btn-sm" onclick="openAddModal()">+ 添加映射</button>
       </div>
       <div class="hint" style="margin-top:-12px;margin-bottom:16px">
-        Cursor 发送请求时会带上模型名 → 代理根据映射表选择上游实际模型名、Cursor 发送格式和中转站接收格式进行转换转发。
-        <br>提示：Cursor 会根据模型名风格选择请求格式 —— Claude 风格的模型名（如 <code>claude-sonnet-4-5-20250929</code>）通常走 <code>/v1/chat/completions</code>，GPT 风格的模型名走 <code>/v1/responses</code>。即使 Cursor 把 Responses 风格的请求体发到 <code>/v1/chat/completions</code>（已知 BYOK bug），代理也会自动识别并正确转换。
+        Cursor 固定通过 <code>/v1/chat/completions</code> 发送请求。代理识别当前两种 Chat 工具方言，再按模型映射转换到指定上游协议。
       </div>
       <div id="mappingList"></div>
     </div>
@@ -108,24 +107,9 @@
       <div class="hint">发送到中转站的真实模型名称</div>
     </div>
     <div class="field">
-      <label>Cursor 发送格式</label>
-      <div class="input-wrap">
-        <select id="mClientFormat">
-          <option value="auto">自动（跟随请求实际到达的入口，推荐）</option>
-          <option value="chat">Chat Completions (/v1/chat/completions)</option>
-          <option value="responses">Responses (/v1/responses)</option>
-          <option value="messages">Anthropic Messages (/v1/messages)</option>
-        </select>
-      </div>
-      <div class="hint">
-        声明 Cursor 会用什么格式发送这个模型的请求。运行时以请求实际到达的入口为准（响应必须匹配入口才能被 Cursor 解析），
-        选择 <b>chat</b> 时即使请求体是 Responses 风格（BYOK bug）也会被自动识别。
-      </div>
-    </div>
-    <div class="field">
       <label>中转站接收格式</label>
       <div class="input-wrap">
-        <select id="mUpstreamFormat">
+        <select id="mUpstreamProtocol">
           <option value="auto">自动检测（按上游模型名判断）</option>
           <option value="chat">Chat Completions (/v1/chat/completions)</option>
           <option value="messages">Anthropic Messages (/v1/messages)</option>
@@ -138,8 +122,7 @@
         <b>messages</b>：适用于中转站通过 <code>/v1/messages</code> 提供 Claude 模型<br>
         <b>responses</b>：适用于中转站仅通过 <code>/v1/responses</code> 提供模型能力<br>
         <b>gemini</b>：适用于 Google Gemini API 或兼容的中转站<br>
-        <b>自动检测</b>：按上游模型名判断（含 claude → messages，含 gemini → gemini，其他 → chat）<br>
-        两侧格式相同时直接透传，不做协议转换。
+        <b>自动检测</b>：按上游模型名判断（含 claude → messages，含 gemini → gemini，其他 → chat）
       </div>
     </div>
     <div class="field">

@@ -1,36 +1,37 @@
 # API 2 Cursor
 
-让 Cursor 通过第三方中转站使用任意 LLM 模型的协议转换代理。FastAPI + 统一中间表示（IR）架构。
+让 Cursor 通过第三方中转站使用不同 LLM 协议的轻量转换网关。
 
-## 它解决什么问题
+Cursor 客户端只需要访问：
 
-Cursor 的 BYOK 有两个麻烦：
+- `POST /v1/chat/completions`
+- `GET /v1/models`
 
-1. **请求格式由模型名决定**：Claude 风格模型名走 `/v1/chat/completions`（Chat Completions），GPT 风格模型名走 `/v1/responses`（Responses API），配 Anthropic Key 时走 `/v1/messages`。
-2. **已知 bug**：Cursor 会把请求发到 `/v1/chat/completions`，但请求体实际是 Responses API 格式（无 `messages`，有 `input`/`instructions`），同时期望返回值仍是 Chat Completions 格式。
+网关识别 Cursor 当前两种 Chat 工具方言：
 
-而中转站通常只支持其中一种协议。本项目在中间做协议转换：**你在映射里声明"Cursor 发送什么格式"和"中转站接收什么格式"，剩下的交给代理**——包括 bug 场景的自动识别。两侧格式相同时直接透传。
+- 标准 `function` 工具
+- 带 grammar `format` 的 `custom` 工具
 
-## 架构
+请求通过 [llm-rosetta](https://github.com/Oaklight/llm-rosetta) 的统一 IR 转换到四种上游协议：
 
-任意组合不再写点对点转换，而是经过统一中间表示（IR）：每种协议只有一个编解码器，`Cursor 格式 → IR → 中转站格式`，回程反向；流式则是 `上游 SSE → IR 事件流 → 兼容过滤器 → Cursor SSE`。
+- OpenAI Chat Completions
+- OpenAI Responses
+- Anthropic Messages
+- Google Gemini GenAI
+
+`/v1/responses` 与 `/v1/messages` 不作为客户端入口。
+
+## 数据流
 
 ```text
-Cursor                          API 2 Cursor                        中转站
-  │                                  │                                 │
-  ├─ /v1/chat/completions ──┐        │        ┌─────────→ /v1/chat/completions
-  │   (含 Responses 风格     │   ┌────┴────┐   │
-  │    body 的 bug 场景)     ├──→│  解析 → IR │──┼─────────→ /v1/messages
-  ├─ /v1/responses ─────────┤   │  IR → 构建 │  │
-  │                         │   └────┬────┘   ├─────────→ /v1/responses
-  └─ /v1/messages ──────────┘        │        └─────────→ Gemini generateContent
-                                     │
-                          两侧格式相同时直接透传
+Cursor Chat
+  → Cursor 方言适配
+  → llm-rosetta IR
+  → 模型映射与请求策略
+  → Chat / Responses / Messages / Gemini
+  → llm-rosetta 流式或非流式回编
+  → Cursor Chat
 ```
-
-- 入口协议：`chat` / `responses` / `messages`（响应格式始终匹配请求到达的入口）
-- 上游协议：`chat` / `messages` / `responses` / `gemini`
-- BYOK bug 处理：`chat` 入口收到 Responses 风格请求体时自动按 Responses 解析，返回时仍编码为 Chat Completions
 
 ## 快速开始
 
@@ -89,15 +90,12 @@ git push main v1.0.0   # 推送标签即触发自动构建发布
 
 - **Cursor 模型名** — 在 Cursor 自定义模型中填入的名称
 - **上游模型名** — 发送到中转站的实际模型名
-- **Cursor 发送格式** — `auto`（跟随请求实际到达的入口，推荐）/ `chat` / `responses` / `messages`
 - **中转站接收格式** — `auto`（按上游模型名判断）/ `chat` / `messages` / `responses` / `gemini`
 - **自定义地址/密钥** — 可选，覆盖全局设置，实现分流到不同中转站
 - **自定义指令** — 注入到上游请求的系统提示词（可选前置/后置）
 - **Body / Header 修改** — 对上游请求做字段级增删改（值为 `null` 删除）
 
-**示例**：在 Cursor 中添加 `claude-sonnet-4-5-20250929`，映射到上游 `gpt-5.4`，中转站接收格式选 `responses`。Cursor 发来的请求（无论是标准 CC 还是 Responses 风格 body）都会被转换为 `/v1/responses` 请求，响应再转回 Cursor 期望的格式。
-
-> **提示**：使用 Claude 风格的模型名可以让 Cursor 显示思考过程（thinking）。旧版 `backend` 字段的 `data/settings.json` 会在启动时自动迁移。
+**示例**：在 Cursor 中添加 `claude-sonnet-4-5-20250929`，映射到上游 `gpt-5.4`，中转站接收格式选 `responses`。请求会转换到 `/v1/responses`，响应再统一回编为 Cursor Chat。
 
 ### 在 Cursor 中配置
 
@@ -111,43 +109,34 @@ git push main v1.0.0   # 推送标签即触发自动构建发布
 ```text
 main.py                      # 启动入口 (uvicorn)
 app/
-├── __init__.py              # 应用工厂 + lifespan(httpx 连接池) + 鉴权中间件
-├── config.py                # 环境变量 (pydantic-settings)
-├── store.py                 # data/settings.json 持久化 + 旧格式迁移 + 模型映射解析
+├── __init__.py              # 应用组装、连接池与鉴权
 ├── api/
-│   ├── entry.py             # /v1/chat/completions、/v1/responses、/v1/messages、/v1/models
+│   ├── chat.py              # /v1/chat/completions、/v1/models
 │   └── admin.py             # 管理面板 + API
-├── core/
-│   ├── ir.py                # 统一中间表示：请求/响应/流式事件
-│   ├── routing.py           # 模型映射 → 路由决策
-│   ├── pipeline.py          # 编排：转换与透传两条路径（流式 + 非流式）
-│   └── upstream.py          # httpx 转发、SSE 解析
-├── protocols/               # 每种协议一个编解码器
-│   ├── chat_completions.py  # CC 双向
-│   ├── responses_api.py     # Responses 双向（含 prompt_cache_key）
-│   ├── anthropic.py         # Messages 双向（含 cache_control、max_tokens 兜底）
-│   └── gemini.py            # Gemini 仅上游方向
-├── compat/
-│   ├── detect.py            # Responses 风格请求体检测（BYOK bug）
-│   ├── tools.py             # 工具定义规范化 + 参数修复
-│   └── thinking.py          # <think> 标签提取 + thinking 缓存 + messages 透传注入
-├── services/
-│   ├── request_log.py       # 三档调试日志（verbose 写对话级文件）
+├── chat/
+│   ├── gateway.py           # 单一 Chat 用例编排
+│   ├── cursor.py            # Cursor 双方言边界
+│   ├── rosetta.py           # llm-rosetta 转换门面
+│   ├── streaming.py         # 流式事件回编
+│   └── exchange.py          # 请求上下文与错误
+├── upstream/
+│   ├── protocols.py         # URL、鉴权和 wire 规则
+│   └── client.py            # HTTP 与 SSE
+├── settings/
+│   ├── schema.py            # 配置与环境变量模型
+│   ├── repository.py        # 原子读写和缓存
+│   └── resolver.py          # 模型映射解析
+├── observability/
+│   ├── request_log.py       # 对话日志
 │   └── usage.py             # 用量统计
 └── static/                  # 管理面板前端
 ```
 
-## 兼容性处理
+## Custom grammar 工具
 
-- Responses 风格请求体误入 `/v1/chat/completions` 自动识别（`input`/`instructions`/`reasoning`/`text` 等标记），并剥离 Cursor 混入的 CC 专属字段（`stream_options`/`metadata`，原样转发会被 `/v1/responses` 上游拒绝）
-- Cursor 扁平工具定义 → 标准格式；Anthropic 风格 `tool_use`/`tool_result` 块混入 CC 消息的转换
-- `reasoningContent` → `reasoning_content`；`<think>` 标签 → 思考内容（流式跨块解析）
-- 旧版 `function_call` → `tool_calls`；流式 tool_calls 空白 id/name 清理与元数据补全
-- StrReplace 智能引号容错修复、`file_path` → `path`
-- 多轮对话 thinking 缓存回注（Cursor 不回传思考内容，推理模型缺失历史 thinking 时降质）
-- 提示缓存全链路：Anthropic 上游自动顶层 `cache_control`；Responses / Chat Completions 上游自动生成稳定的 `prompt_cache_key`（按模型+系统提示词哈希，跨轮一致；上游不支持时可用 body_modifications 设 `null` 删除）；缓存命中指标（`cached_tokens` / `cache_read_input_tokens`）在各协议间双向换算，Cursor 侧可见
-- Gemini 上游走 v1beta 端点（v1 不支持函数调用）；Gemini 3 强制回传的 `thoughtSignature` 按 tool_call_id 缓存并在多轮工具调用时重新附加，未命中时用官方哨兵值兜底
-- messages 透传时非标准 `reasoning_content` → 标准 thinking block（含流式 index 偏移）
+Responses 上游会保留 Cursor 原始 `custom` 工具和 grammar。Chat、Messages、Gemini 不支持原生 custom grammar 时，工具会降级为一个接收 `input` 字符串的函数，并在描述中保留格式提示。
+
+回程时 custom 工具参数会恢复为 Cursor 需要的裸文本 `function.arguments`。
 
 ## 调试日志
 

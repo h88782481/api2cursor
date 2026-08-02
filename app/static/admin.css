@@ -61,7 +61,6 @@ main{padding:28px 0 60px}
 .tag-responses{background:rgba(59,130,246,.15);color:#60a5fa}
 .tag-gemini{background:rgba(66,133,244,.15);color:#4285f4}
 .tag-auto{background:rgba(139,92,246,.15);color:#a78bfa}
-.tag-passthrough{background:rgba(34,197,94,.15);color:var(--green)}
 .tag-override{background:rgba(59,130,246,.1);color:var(--primary)}
 .tag-instructions{background:rgba(234,179,8,.15);color:var(--yellow)}
 .tag-mods{background:rgba(168,85,247,.15);color:#c084fc}
