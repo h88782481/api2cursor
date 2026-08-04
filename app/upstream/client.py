@@ -17,7 +17,11 @@ class UpstreamClient:
         headers: dict[str, str],
         body: dict,
     ) -> httpx.Response:
-        return await self.client.post(url, headers=headers, json=body)
+        return await self.client.post(
+            url,
+            headers=httpx.Headers(headers, encoding='latin-1'),
+            json=body,
+        )
 
     async def stream(
         self,
@@ -25,7 +29,12 @@ class UpstreamClient:
         headers: dict[str, str],
         body: dict,
     ) -> httpx.Response:
-        request = self.client.build_request('POST', url, headers=headers, json=body)
+        request = self.client.build_request(
+            'POST',
+            url,
+            headers=httpx.Headers(headers, encoding='latin-1'),
+            json=body,
+        )
         return await self.client.send(request, stream=True)
 
 
