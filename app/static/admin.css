@@ -57,6 +57,21 @@ main{padding:28px 0 60px}
 .template-item:hover{border-color:var(--primary)}
 .template-form{min-width:0}
 .template-actions{display:flex;gap:8px;justify-content:flex-end}
+.multi-select{position:relative}
+.multi-select-control{display:flex;align-items:center;justify-content:space-between;gap:8px;width:100%;min-height:42px;background:var(--input);border:1px solid var(--border);border-radius:8px;padding:6px 12px;color:var(--text);cursor:pointer;text-align:left}
+.multi-select-control:hover,.multi-select.open .multi-select-control{border-color:var(--primary)}
+.multi-select-values{display:flex;flex-wrap:wrap;gap:5px;min-width:0}
+.multi-select-placeholder{color:var(--muted);font-size:14px}
+.multi-select-arrow{color:var(--muted);font-size:18px;line-height:1}
+.multi-select-tag{display:inline-flex;align-items:center;gap:5px;max-width:100%;background:rgba(59,130,246,.16);border:1px solid rgba(59,130,246,.35);border-radius:5px;padding:2px 6px;color:#bfdbfe;font-size:12px}
+.multi-select-tag button{border:0;background:transparent;color:#93c5fd;cursor:pointer;font-size:15px;line-height:1;padding:0}
+.multi-select-tag button:hover{color:#fff}
+.multi-select-menu{display:none;position:absolute;left:0;right:0;top:calc(100% + 5px);z-index:20;max-height:190px;overflow-y:auto;background:var(--input);border:1px solid var(--primary);border-radius:8px;padding:5px;box-shadow:0 12px 30px rgba(0,0,0,.35)}
+.multi-select.open .multi-select-menu{display:block}
+.multi-select-option{display:flex;align-items:center;justify-content:space-between;width:100%;border:0;border-radius:5px;background:transparent;color:var(--text);padding:9px 10px;text-align:left;cursor:pointer}
+.multi-select-option:hover,.multi-select-option.selected{background:rgba(148,163,184,.35)}
+.multi-select-check{color:#60a5fa;font-weight:700}
+.multi-select-empty{padding:9px 10px;color:var(--muted);font-size:13px}
 .replacement-roles{display:flex;gap:16px;margin-bottom:12px;color:var(--muted);font-size:13px}
 .replacement-roles input{accent-color:var(--primary)}
 .ins-dialect-title{font-size:13px;font-weight:600;color:var(--text);margin-bottom:10px}
@@ -87,6 +102,7 @@ main{padding:28px 0 60px}
 .tag-thinking{background:rgba(236,72,153,.15);color:#f472b6}
 .tag-fast{background:rgba(34,197,94,.15);color:#86efac}
 .tag-mods{background:rgba(168,85,247,.15);color:#c084fc}
+.tag-replacement{background:rgba(14,165,233,.24);border:1px solid rgba(103,232,249,.24);color:#67e8f9}
 .mapping-actions{margin-left:auto;display:flex;gap:6px}
 .empty{text-align:center;padding:40px;color:var(--muted)}
 

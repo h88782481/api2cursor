@@ -170,7 +170,16 @@
     <div class="field"><label>Header 模板</label><div class="input-wrap"><select id="mHeaderTemplate"></select></div></div>
     <div class="field">
       <label>文本替换模板（可多选）</label>
-      <div class="input-wrap"><select id="mReplacementTemplate" multiple size="4"></select></div>
+      <div class="multi-select" id="mReplacementPicker">
+        <div class="multi-select-control" id="mReplacementControl" role="button" tabindex="0"
+          onclick="toggleReplacementPicker(event)"
+          onkeydown="if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); toggleReplacementPicker(event); }"
+          aria-expanded="false">
+          <span class="multi-select-values" id="mReplacementValues"></span>
+          <span class="multi-select-arrow">⌄</span>
+        </div>
+        <div class="multi-select-menu" id="mReplacementMenu"></div>
+      </div>
       <div class="hint">按选择顺序依次执行替换。</div>
     </div>
     <div class="field">

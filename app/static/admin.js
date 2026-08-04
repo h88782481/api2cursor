@@ -3,6 +3,7 @@ let authKey = '';
 let editingName = null;
 let templateKind = 'address';
 let templates = { address: {}, instruction: {}, body: {}, header: {}, replacement: {} };
+let selectedReplacementNames = [];
 let instructionBlocks = { function: [], custom_grammar: [] };
 let instructionStatuses = {};
 
@@ -97,15 +98,67 @@ function fillTemplateSelections() {
     ['instruction', 'mInstructionTemplate'],
     ['body', 'mBodyTemplate'],
     ['header', 'mHeaderTemplate'],
-    ['replacement', 'mReplacementTemplate'],
   ];
   for (const [kind, id] of fields) {
-    const empty = kind === 'replacement' ? '' : '<option value="">不使用模板</option>';
     document.getElementById(id).innerHTML =
-      `${empty}${Object.keys(templates[kind] || {}).map(name => (
+      `<option value="">不使用模板</option>${Object.keys(templates[kind] || {}).map(name => (
         `<option value="${esc(name)}">${esc(name)}</option>`
       )).join('')}`;
   }
+  renderReplacementPicker();
+}
+
+function renderReplacementPicker() {
+  const menu = document.getElementById('mReplacementMenu');
+  const available = Object.keys(templates.replacement || {});
+  const availableSet = new Set(available);
+  selectedReplacementNames = [...new Set(selectedReplacementNames)]
+    .filter(name => availableSet.has(name));
+  menu.innerHTML = available.length
+    ? available.map(name => `
+      <button class="multi-select-option${selectedReplacementNames.includes(name) ? ' selected' : ''}" type="button"
+        data-name="${esc(name)}">
+        <span>${esc(name)}</span>
+        <span class="multi-select-check">${selectedReplacementNames.includes(name) ? '✓' : ''}</span>
+      </button>
+    `).join('')
+    : '<div class="multi-select-empty">暂无文本替换模板</div>';
+  document.getElementById('mReplacementValues').innerHTML = selectedReplacementNames.length
+    ? selectedReplacementNames.map(name => `
+      <span class="multi-select-tag">
+        ${esc(name)}
+        <button class="multi-select-remove" type="button" data-name="${esc(name)}" aria-label="取消选择">×</button>
+      </span>
+    `).join('')
+    : '<span class="multi-select-placeholder">请选择文本替换模板</span>';
+}
+
+function toggleReplacementPicker(event) {
+  event?.stopPropagation();
+  const picker = document.getElementById('mReplacementPicker');
+  const opened = picker.classList.toggle('open');
+  document.getElementById('mReplacementControl').setAttribute('aria-expanded', opened);
+}
+
+function toggleReplacement(name) {
+  const index = selectedReplacementNames.indexOf(name);
+  if (index === -1) selectedReplacementNames.push(name);
+  else selectedReplacementNames.splice(index, 1);
+  renderReplacementPicker();
+  document.getElementById('mReplacementPicker').classList.add('open');
+}
+
+function removeReplacement(name, event) {
+  event.stopPropagation();
+  selectedReplacementNames = selectedReplacementNames.filter(item => item !== name);
+  renderReplacementPicker();
+}
+
+function setSelectedReplacementNames(names) {
+  selectedReplacementNames = Array.isArray(names)
+    ? names.filter(name => typeof name === 'string')
+    : [];
+  renderReplacementPicker();
 }
 
 function selectTemplateKind(kind) {
@@ -307,8 +360,9 @@ function resetMappingForm() {
   document.getElementById('mFastMode').checked = false;
   ['mAddressTemplate', 'mInstructionTemplate', 'mBodyTemplate', 'mHeaderTemplate']
     .forEach(id => { document.getElementById(id).value = ''; });
-  [...document.getElementById('mReplacementTemplate').options]
-    .forEach(option => { option.selected = false; });
+  setSelectedReplacementNames([]);
+  document.getElementById('mReplacementPicker').classList.remove('open');
+  document.getElementById('mReplacementControl').setAttribute('aria-expanded', 'false');
 }
 
 async function openAddModal() {
@@ -335,9 +389,7 @@ async function openEditModal(name) {
       ['address', 'mAddressTemplate'], ['instruction', 'mInstructionTemplate'],
       ['body', 'mBodyTemplate'], ['header', 'mHeaderTemplate'],
     ]) document.getElementById(id).value = mapping.templates?.[kind] || '';
-    const selectedReplacements = new Set(mapping.templates?.replacements || []);
-    [...document.getElementById('mReplacementTemplate').options]
-      .forEach(option => { option.selected = selectedReplacements.has(option.value); });
+    setSelectedReplacementNames(mapping.templates?.replacements || []);
     document.getElementById('modal').classList.add('active');
   } catch (error) {
     toast(`错误: ${error.message}`, false);
@@ -364,7 +416,7 @@ async function saveMapping() {
       instruction: document.getElementById('mInstructionTemplate').value,
       body: document.getElementById('mBodyTemplate').value,
       header: document.getElementById('mHeaderTemplate').value,
-      replacements: [...document.getElementById('mReplacementTemplate').selectedOptions].map(option => option.value),
+      replacements: [...selectedReplacementNames],
     },
     thinking_level: document.getElementById('mThinkingLevel').value,
     fast_mode: document.getElementById('mFastMode').checked,
@@ -441,6 +493,22 @@ function esc(value) {
 
 document.getElementById('modal').addEventListener('click', event => {
   if (event.target === event.currentTarget) closeModal();
+});
+document.getElementById('mReplacementMenu').addEventListener('click', event => {
+  event.stopPropagation();
+  const option = event.target.closest('.multi-select-option');
+  if (option) return toggleReplacement(option.dataset.name);
+});
+document.getElementById('mReplacementValues').addEventListener('click', event => {
+  const remove = event.target.closest('.multi-select-remove');
+  if (remove) removeReplacement(remove.dataset.name, event);
+});
+document.addEventListener('click', event => {
+  const picker = document.getElementById('mReplacementPicker');
+  if (picker && !picker.contains(event.target)) {
+    picker.classList.remove('open');
+    document.getElementById('mReplacementControl').setAttribute('aria-expanded', 'false');
+  }
 });
 document.addEventListener('keydown', event => {
   if (event.key === 'Escape') closeModal();
