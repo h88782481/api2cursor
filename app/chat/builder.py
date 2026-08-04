@@ -46,6 +46,7 @@ class UpstreamRequestBuilder:
     def build(self, payload: dict[str, Any]) -> PreparedRequest:
         dialect, request, custom_tools = self.cursor.parse(payload)
         route = self.resolver.resolve(payload['model'])
+        apply_text_replacements(request, route.replacements)
         injection = apply_system_injection(
             request,
             dialect,
@@ -93,6 +94,36 @@ def _apply_reasoning_wire(body: dict[str, Any], route: Route) -> None:
         body.setdefault('output_config', {})['effort'] = route.thinking_level
     else:
         body['thinkingConfig'] = {'thinkingLevel': route.thinking_level}
+
+
+def apply_text_replacements(request: dict[str, Any], template: Any) -> None:
+    for template in template:
+        for role in template.roles:
+            if role == 'system':
+                _replace_system(request, template.find, template.replace)
+            elif role == 'user':
+                _replace_user(request, template.find, template.replace)
+
+
+def _replace_system(request: dict[str, Any], find: str, replace: str) -> None:
+    _replace_parts(request.get('system_instruction'), find, replace)
+
+
+def _replace_user(request: dict[str, Any], find: str, replace: str) -> None:
+    for message in request.get('messages', []):
+        if not isinstance(message, dict) or message.get('role') != 'user':
+            continue
+        _replace_parts(message.get('content'), find, replace)
+
+
+def _replace_parts(parts: Any, find: str, replace: str) -> None:
+    if isinstance(parts, str):
+        return
+    if not isinstance(parts, list):
+        return
+    for part in parts:
+        if isinstance(part, dict) and part.get('type') == 'text':
+            part['text'] = part.get('text', '').replace(find, replace)
 
 
 def _apply_service_tier(

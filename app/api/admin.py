@@ -13,7 +13,11 @@ from pydantic import BaseModel, ValidationError
 from ..chat.instructions import blocks_as_dicts, valid_targets
 from ..errors import ApiError
 from ..settings import Settings, env
-from ..settings.schema import AddressTemplate, InstructionSettings
+from ..settings.schema import (
+    AddressTemplate,
+    InstructionSettings,
+    TextReplacementTemplate,
+)
 from .common import read_json_object, require_access
 from .dto import AdminMapping, AdminSettingsUpdate
 
@@ -103,7 +107,7 @@ async def get_templates(request: Request):
 
 @admin_api.put('/templates/{kind}/{name:path}')
 async def save_template(kind: str, name: str, request: Request):
-    if kind not in ('address', 'instruction', 'body', 'header'):
+    if kind not in ('address', 'instruction', 'body', 'header', 'replacement'):
         raise ApiError('模板类型无效', 'invalid_request_error', 400)
     name = name.strip()
     if not name:
@@ -122,12 +126,12 @@ async def save_template(kind: str, name: str, request: Request):
 
 @admin_api.delete('/templates/{kind}/{name:path}')
 async def delete_template(kind: str, name: str, request: Request):
-    if kind not in ('address', 'instruction', 'body', 'header'):
+    if kind not in ('address', 'instruction', 'body', 'header', 'replacement'):
         raise ApiError('模板类型无效', 'invalid_request_error', 400)
     repository = request.app.state.settings_repository
     current = repository.edit()
     if any(
-        getattr(mapping.templates, kind) == name
+        name in _mapping_template_names(mapping, kind)
         for mapping in current.models.values()
     ):
         raise ApiError('模板仍被模型映射使用，不能删除', 'conflict', 409)
@@ -256,20 +260,31 @@ def _parse_template(kind: str, payload: dict[str, Any]) -> Any:
                     400,
                 )
         return value
+    if kind == 'replacement':
+        return _validate(TextReplacementTemplate, payload)
     if not isinstance(payload, dict):
         raise ApiError('模板内容必须是 JSON 对象', 'invalid_request_error', 400)
     return payload
 
 
 def _validate_template_selection(settings: Settings, mapping: AdminMapping) -> None:
-    for kind in ('address', 'instruction', 'body', 'header'):
-        name = getattr(mapping.templates, kind)
-        if name and name not in getattr(settings.templates, kind):
-            raise ApiError(
-                f'{kind} 模板不存在: {name}',
-                'invalid_request_error',
-                400,
-            )
+    for kind in ('address', 'instruction', 'body', 'header', 'replacement'):
+        for name in _mapping_template_names(mapping, kind):
+            if name and name not in getattr(settings.templates, kind):
+                raise ApiError(
+                    f'{kind} 模板不存在: {name}',
+                    'invalid_request_error',
+                    400,
+                )
+
+
+def _mapping_template_names(mapping: AdminMapping, kind: str) -> list[str]:
+    value = (
+        mapping.templates.replacements
+        if kind == 'replacement'
+        else getattr(mapping.templates, kind)
+    )
+    return value if isinstance(value, list) else [value]
 
 
 def _save_and_respond(repository, data: Settings, log_message: str) -> Any:

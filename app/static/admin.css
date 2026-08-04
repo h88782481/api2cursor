@@ -57,6 +57,8 @@ main{padding:28px 0 60px}
 .template-item:hover{border-color:var(--primary)}
 .template-form{min-width:0}
 .template-actions{display:flex;gap:8px;justify-content:flex-end}
+.replacement-roles{display:flex;gap:16px;margin-bottom:12px;color:var(--muted);font-size:13px}
+.replacement-roles input{accent-color:var(--primary)}
 .ins-dialect-title{font-size:13px;font-weight:600;color:var(--text);margin-bottom:10px}
 .ins-dialect-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:10px}
 .ins-dialect-head .ins-dialect-title{margin-bottom:0}

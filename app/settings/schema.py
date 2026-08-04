@@ -13,6 +13,7 @@ DebugMode = Literal['off', 'simple', 'verbose']
 ThinkingLevel = Literal['default', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
 InjectionMode = Literal['prepend', 'append', 'replace']
 InstructionTarget = str
+PromptRole = Literal['system', 'user']
 
 
 class Environment(BaseSettings):
@@ -69,6 +70,14 @@ class InstructionSettings(BaseModel):
         return self.function if dialect == 'function' else self.custom_grammar
 
 
+class TextReplacementTemplate(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+
+    roles: list[PromptRole] = Field(min_length=1)
+    find: str = Field(min_length=1)
+    replace: str = ''
+
+
 class RequestSettings(BaseModel):
     model_config = ConfigDict(extra='forbid')
 
@@ -90,6 +99,7 @@ class TemplateSelection(BaseModel):
     instruction: str = ''
     body: str = ''
     header: str = ''
+    replacements: list[str] = Field(default_factory=list)
 
 
 class TemplateSettings(BaseModel):
@@ -99,6 +109,7 @@ class TemplateSettings(BaseModel):
     instruction: dict[str, InstructionSettings] = Field(default_factory=dict)
     body: dict[str, dict[str, Any]] = Field(default_factory=dict)
     header: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    replacement: dict[str, TextReplacementTemplate] = Field(default_factory=dict)
 
 
 class ModelMapping(BaseModel):

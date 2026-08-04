@@ -89,8 +89,9 @@ python main.py
 - **Fast 模式** — 默认透传 Cursor 发送的 `service_tier`；映射中的开关可强制为 Chat / Responses 请求设置 `service_tier: "priority"`，需要上游支持且可能产生额外费用
 - **指令模板** — 从模板管理中选择按 Cursor 双方言配置的 system 提示词注入规则
 - **Body / Header 模板** — 从模板管理中选择对上游请求做字段级增删改的规则（值为 `null` 删除）
+- **文本替换模板** — 每个模板配置一条替换规则，可分别或同时作用于 `system`、`user` 提示词；模型映射可按顺序多选模板
 
-模板在管理面板的“模板管理”区域单独维护，模型映射只保存四个模板名称。
+模板在管理面板的“模板管理”区域单独维护，模型映射只保存模板名称。
 
 **示例**：在 Cursor 中添加 `claude-sonnet-4-5-20250929`，映射到上游 `gpt-5.4`，中转站接收格式选 `responses`。请求会转换到 `/v1/responses`，响应再统一回编为 Cursor Chat。
 

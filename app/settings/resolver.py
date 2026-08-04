@@ -7,7 +7,13 @@ from typing import Any
 
 from ..protocol import ConfiguredProtocol, WireProtocol
 from .repository import SettingsRepository
-from .schema import InstructionSettings, TemplateSelection, ThinkingLevel, env
+from .schema import (
+    InstructionSettings,
+    TemplateSelection,
+    TextReplacementTemplate,
+    ThinkingLevel,
+    env,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -18,6 +24,7 @@ class Route:
     base_url: str
     api_key: str
     instructions: InstructionSettings = field(default_factory=InstructionSettings)
+    replacements: tuple[TextReplacementTemplate, ...] = ()
     thinking_level: ThinkingLevel = 'default'
     fast_mode: bool = False
     body_overrides: dict[str, Any] = field(default_factory=dict)
@@ -39,6 +46,11 @@ class RouteResolver:
         instructions = templates.instruction.get(selection.instruction)
         body = templates.body.get(selection.body, {})
         headers = templates.header.get(selection.header, {})
+        replacements = tuple(
+            template
+            for name in selection.replacements
+            if (template := templates.replacement.get(name)) is not None
+        )
 
         model = (upstream.model if upstream else '') or global_upstream.model or client_model
         protocol: ConfiguredProtocol = upstream.protocol if upstream else 'auto'
@@ -57,6 +69,7 @@ class RouteResolver:
             base_url=(address.base_url if address else '') or global_upstream.base_url or env.proxy_target_url,
             api_key=(address.api_key if address else '') or global_upstream.api_key or env.proxy_api_key,
             instructions=instructions or InstructionSettings(),
+            replacements=replacements,
             thinking_level=mapping.request.thinking_level if mapping else 'default',
             fast_mode=mapping.request.fast_mode if mapping else False,
             body_overrides=dict(body),

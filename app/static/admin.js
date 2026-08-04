@@ -2,7 +2,7 @@ const API = '';
 let authKey = '';
 let editingName = null;
 let templateKind = 'address';
-let templates = { address: {}, instruction: {}, body: {}, header: {} };
+let templates = { address: {}, instruction: {}, body: {}, header: {}, replacement: {} };
 let instructionBlocks = { function: [], custom_grammar: [] };
 let instructionStatuses = {};
 
@@ -97,10 +97,12 @@ function fillTemplateSelections() {
     ['instruction', 'mInstructionTemplate'],
     ['body', 'mBodyTemplate'],
     ['header', 'mHeaderTemplate'],
+    ['replacement', 'mReplacementTemplate'],
   ];
   for (const [kind, id] of fields) {
+    const empty = kind === 'replacement' ? '' : '<option value="">不使用模板</option>';
     document.getElementById(id).innerHTML =
-      `<option value="">不使用模板</option>${Object.keys(templates[kind] || {}).map(name => (
+      `${empty}${Object.keys(templates[kind] || {}).map(name => (
         `<option value="${esc(name)}">${esc(name)}</option>`
       )).join('')}`;
   }
@@ -114,6 +116,7 @@ function selectTemplateKind(kind) {
   document.getElementById('addressTemplateFields').style.display = kind === 'address' ? '' : 'none';
   document.getElementById('instructionTemplateFields').style.display = kind === 'instruction' ? '' : 'none';
   document.getElementById('jsonTemplateFields').style.display = ['body', 'header'].includes(kind) ? '' : 'none';
+  document.getElementById('replacementTemplateFields').style.display = kind === 'replacement' ? '' : 'none';
   const list = document.getElementById('templateList');
   list.innerHTML = Object.keys(templates[kind] || {}).map(name => (
     `<button class="template-item" onclick="editTemplate('${esc(name)}')">${esc(name)}</button>`
@@ -126,6 +129,10 @@ function clearTemplateForm() {
   document.getElementById('templateUrl').value = '';
   document.getElementById('templateKey').value = '';
   document.getElementById('templateJson').value = '';
+  document.getElementById('templateReplacementSystem').checked = false;
+  document.getElementById('templateReplacementUser').checked = false;
+  document.getElementById('templateReplacementFind').value = '';
+  document.getElementById('templateReplacementReplace').value = '';
   for (const dialect of ['Fn', 'Cg']) {
     document.getElementById(`template${dialect}Text`).value = '';
     document.getElementById(`template${dialect}Target`).value = 'all';
@@ -143,6 +150,11 @@ function editTemplate(name) {
   } else if (templateKind === 'instruction') {
     writeTemplateRule('Fn', value.function);
     writeTemplateRule('Cg', value.custom_grammar);
+  } else if (templateKind === 'replacement') {
+    document.getElementById('templateReplacementSystem').checked = value.roles?.includes('system') || false;
+    document.getElementById('templateReplacementUser').checked = value.roles?.includes('user') || false;
+    document.getElementById('templateReplacementFind').value = value.find || '';
+    document.getElementById('templateReplacementReplace').value = value.replace || '';
   } else {
     document.getElementById('templateJson').value = JSON.stringify(value, null, 2);
   }
@@ -174,6 +186,15 @@ async function saveTemplate() {
       };
     } else if (templateKind === 'instruction') {
       payload = { function: readTemplateRule('Fn'), custom_grammar: readTemplateRule('Cg') };
+    } else if (templateKind === 'replacement') {
+      payload = {
+        roles: [
+          ...(document.getElementById('templateReplacementSystem').checked ? ['system'] : []),
+          ...(document.getElementById('templateReplacementUser').checked ? ['user'] : []),
+        ],
+        find: document.getElementById('templateReplacementFind').value,
+        replace: document.getElementById('templateReplacementReplace').value,
+      };
     } else {
       payload = JSON.parse(document.getElementById('templateJson').value || '{}');
     }
@@ -261,6 +282,7 @@ async function loadMappings() {
       selected.instruction ? '<span class="tag tag-instructions">指令模板</span>' : '',
       selected.body ? '<span class="tag tag-mods">Body模板</span>' : '',
       selected.header ? '<span class="tag tag-mods">Header模板</span>' : '',
+      selected.replacements?.length ? `<span class="tag tag-replacement">文本替换 ${selected.replacements.length}</span>` : '',
       mapping.thinking_level !== 'default' ? `<span class="tag tag-thinking">思考: ${esc(mapping.thinking_level)}</span>` : '',
       mapping.fast_mode ? '<span class="tag tag-fast">Fast</span>' : '',
       instructionStatusTag(name, hasInstruction),
@@ -285,6 +307,8 @@ function resetMappingForm() {
   document.getElementById('mFastMode').checked = false;
   ['mAddressTemplate', 'mInstructionTemplate', 'mBodyTemplate', 'mHeaderTemplate']
     .forEach(id => { document.getElementById(id).value = ''; });
+  [...document.getElementById('mReplacementTemplate').options]
+    .forEach(option => { option.selected = false; });
 }
 
 async function openAddModal() {
@@ -311,6 +335,9 @@ async function openEditModal(name) {
       ['address', 'mAddressTemplate'], ['instruction', 'mInstructionTemplate'],
       ['body', 'mBodyTemplate'], ['header', 'mHeaderTemplate'],
     ]) document.getElementById(id).value = mapping.templates?.[kind] || '';
+    const selectedReplacements = new Set(mapping.templates?.replacements || []);
+    [...document.getElementById('mReplacementTemplate').options]
+      .forEach(option => { option.selected = selectedReplacements.has(option.value); });
     document.getElementById('modal').classList.add('active');
   } catch (error) {
     toast(`错误: ${error.message}`, false);
@@ -337,6 +364,7 @@ async function saveMapping() {
       instruction: document.getElementById('mInstructionTemplate').value,
       body: document.getElementById('mBodyTemplate').value,
       header: document.getElementById('mHeaderTemplate').value,
+      replacements: [...document.getElementById('mReplacementTemplate').selectedOptions].map(option => option.value),
     },
     thinking_level: document.getElementById('mThinkingLevel').value,
     fast_mode: document.getElementById('mFastMode').checked,

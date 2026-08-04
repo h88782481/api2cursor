@@ -79,6 +79,7 @@
         <button class="btn btn-ghost btn-sm" data-template-kind="instruction" onclick="selectTemplateKind('instruction')">指令</button>
         <button class="btn btn-ghost btn-sm" data-template-kind="body" onclick="selectTemplateKind('body')">Body</button>
         <button class="btn btn-ghost btn-sm" data-template-kind="header" onclick="selectTemplateKind('header')">Header</button>
+        <button class="btn btn-ghost btn-sm" data-template-kind="replacement" onclick="selectTemplateKind('replacement')">文本替换</button>
       </div>
       <div class="template-editor">
         <div class="template-list" id="templateList"></div>
@@ -107,6 +108,21 @@
           </div>
           <div id="jsonTemplateFields">
             <div class="field"><label>JSON 内容</label><div class="input-wrap"><textarea id="templateJson" rows="9" placeholder='{"stream_options": null}'></textarea></div></div>
+          </div>
+          <div id="replacementTemplateFields">
+            <div class="hint" style="margin-bottom:12px">一个模板对应一条替换规则。勾选 system、user 后，会替换对应角色所有文本内容。</div>
+            <div class="replacement-roles">
+              <label><input type="checkbox" id="templateReplacementSystem"> system</label>
+              <label><input type="checkbox" id="templateReplacementUser"> user</label>
+            </div>
+            <div class="field">
+              <label>查找文本</label>
+              <div class="input-wrap"><textarea id="templateReplacementFind" rows="3"></textarea></div>
+            </div>
+            <div class="field">
+              <label>替换为</label>
+              <div class="input-wrap"><textarea id="templateReplacementReplace" rows="3"></textarea></div>
+            </div>
           </div>
           <div class="template-actions">
             <button class="btn btn-primary btn-sm" onclick="saveTemplate()">保存模板</button>
@@ -152,6 +168,11 @@
     <div class="field"><label>指令模板</label><div class="input-wrap"><select id="mInstructionTemplate"></select></div></div>
     <div class="field"><label>Body 模板</label><div class="input-wrap"><select id="mBodyTemplate"></select></div></div>
     <div class="field"><label>Header 模板</label><div class="input-wrap"><select id="mHeaderTemplate"></select></div></div>
+    <div class="field">
+      <label>文本替换模板（可多选）</label>
+      <div class="input-wrap"><select id="mReplacementTemplate" multiple size="4"></select></div>
+      <div class="hint">按选择顺序依次执行替换。</div>
+    </div>
     <div class="field">
       <label>思考等级</label>
       <div class="input-wrap">
