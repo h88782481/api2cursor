@@ -10,9 +10,10 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, ValidationError
 
-from ..chat.instructions import blocks_as_dicts
+from ..chat.instructions import blocks_as_dicts, valid_targets
 from ..errors import ApiError
 from ..settings import Settings, env
+from ..settings.schema import AddressTemplate, InstructionSettings
 from .common import read_json_object, require_access
 from .dto import AdminMapping, AdminSettingsUpdate
 
@@ -94,6 +95,47 @@ async def instruction_blocks():
     return blocks_as_dicts()
 
 
+@admin_api.get('/templates')
+async def get_templates(request: Request):
+    settings = request.app.state.settings_repository.read()
+    return settings.templates.model_dump(mode='json')
+
+
+@admin_api.put('/templates/{kind}/{name:path}')
+async def save_template(kind: str, name: str, request: Request):
+    if kind not in ('address', 'instruction', 'body', 'header'):
+        raise ApiError('模板类型无效', 'invalid_request_error', 400)
+    name = name.strip()
+    if not name:
+        raise ApiError('模板名称不能为空', 'invalid_request_error', 400)
+
+    repository = request.app.state.settings_repository
+    current = repository.edit()
+    templates = getattr(current.templates, kind)
+    templates[name] = _parse_template(kind, await read_json_object(request))
+    if kind == 'instruction':
+        for model, mapping in current.models.items():
+            if mapping.templates.instruction == name:
+                request.app.state.instruction_status.clear(model)
+    return _save_and_respond(repository, current, f'{kind} 模板已保存: {name}')
+
+
+@admin_api.delete('/templates/{kind}/{name:path}')
+async def delete_template(kind: str, name: str, request: Request):
+    if kind not in ('address', 'instruction', 'body', 'header'):
+        raise ApiError('模板类型无效', 'invalid_request_error', 400)
+    repository = request.app.state.settings_repository
+    current = repository.edit()
+    if any(
+        getattr(mapping.templates, kind) == name
+        for mapping in current.models.values()
+    ):
+        raise ApiError('模板仍被模型映射使用，不能删除', 'conflict', 409)
+    templates = getattr(current.templates, kind)
+    templates.pop(name, None)
+    return _save_and_respond(repository, current, f'{kind} 模板已删除: {name}')
+
+
 @admin_api.get('/instruction-status')
 async def instruction_status(request: Request):
     settings = request.app.state.settings_repository.read()
@@ -106,7 +148,10 @@ async def instruction_status(request: Request):
                 status := tracker.reconcile(
                     model,
                     dialect,
-                    mapping.instructions.for_dialect(dialect),
+                    settings.templates.instruction.get(
+                        mapping.templates.instruction,
+                        InstructionSettings(),
+                    ).for_dialect(dialect),
                 )
             )
         }
@@ -129,13 +174,13 @@ async def list_mappings(request: Request):
 @admin_api.post('/mappings')
 async def add_mapping(request: Request):
     data = _validate(AdminMapping, await read_json_object(request))
-    _validate_instruction_targets(data)
     name = data.name.strip()
     if not name:
         raise ApiError('名称不能为空', 'invalid_request_error', 400)
 
     repository = request.app.state.settings_repository
     current = repository.edit()
+    _validate_template_selection(current, data)
     current.models[name] = data.to_mapping(name)
     request.app.state.instruction_status.clear(name)
     return _save_and_respond(repository, current, f'映射已添加: {name}')
@@ -144,12 +189,12 @@ async def add_mapping(request: Request):
 @admin_api.put('/mappings/{name:path}')
 async def update_mapping(name: str, request: Request):
     data = _validate(AdminMapping, await read_json_object(request))
-    _validate_instruction_targets(data)
     repository = request.app.state.settings_repository
     current = repository.edit()
     if name not in current.models:
         raise ApiError('映射不存在', 'not_found', 404)
 
+    _validate_template_selection(current, data)
     new_name = data.name.strip() or name
     entry = data.to_mapping(new_name)
     if new_name != name:
@@ -191,11 +236,40 @@ def _validate(model: type[T], data: dict[str, Any]) -> T:
         raise ApiError(message, 'invalid_request_error', 400) from exc
 
 
-def _validate_instruction_targets(mapping: AdminMapping) -> None:
-    try:
-        mapping.validate_targets()
-    except ValueError as exc:
-        raise ApiError(str(exc), 'invalid_request_error', 400) from exc
+def _parse_template(kind: str, payload: dict[str, Any]) -> Any:
+    if kind == 'address':
+        return _validate(AddressTemplate, payload)
+    if kind == 'instruction':
+        value = _validate(InstructionSettings, payload)
+        for dialect in ('function', 'custom_grammar'):
+            rule = value.for_dialect(dialect)
+            if rule.text and rule.target not in valid_targets(dialect):
+                raise ApiError(
+                    f'instructions.{dialect}.target 无效: {rule.target}',
+                    'invalid_request_error',
+                    400,
+                )
+            if rule.text and rule.target != 'all' and f'</{rule.target}>' in rule.text:
+                raise ApiError(
+                    f'instructions.{dialect}.text 不能包含 </{rule.target}>',
+                    'invalid_request_error',
+                    400,
+                )
+        return value
+    if not isinstance(payload, dict):
+        raise ApiError('模板内容必须是 JSON 对象', 'invalid_request_error', 400)
+    return payload
+
+
+def _validate_template_selection(settings: Settings, mapping: AdminMapping) -> None:
+    for kind in ('address', 'instruction', 'body', 'header'):
+        name = getattr(mapping.templates, kind)
+        if name and name not in getattr(settings.templates, kind):
+            raise ApiError(
+                f'{kind} 模板不存在: {name}',
+                'invalid_request_error',
+                400,
+            )
 
 
 def _save_and_respond(repository, data: Settings, log_message: str) -> Any:

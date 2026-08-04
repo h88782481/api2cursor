@@ -60,13 +60,6 @@ python main.py
 
 服务启动后访问 `http://localhost:3029/admin` 进入管理面板。
 
-### 发布新版本（维护者）
-
-```bash
-git tag v1.0.0
-git push main v1.0.0   # 推送标签即触发自动构建发布
-```
-
 ## 配置
 
 ### 环境变量
@@ -91,14 +84,13 @@ git push main v1.0.0   # 推送标签即触发自动构建发布
 - **Cursor 模型名** — 在 Cursor 自定义模型中填入的名称
 - **上游模型名** — 发送到中转站的实际模型名
 - **中转站接收格式** — `auto`（按上游模型名判断）/ `chat` / `messages` / `responses` / `gemini`
-- **自定义地址/密钥** — 可选，覆盖全局设置，实现分流到不同中转站
+- **地址模板** — 从模板管理中选择地址和 API Key，实现分流到不同中转站
 - **思考等级** — 可选 `minimal` / `low` / `medium` / `high` / `xhigh` / `max`，按上游协议转换为对应的 reasoning/thinking 字段；具体可用等级取决于模型，不支持时上游会拒绝请求
 - **Fast 模式** — 默认透传 Cursor 发送的 `service_tier`；映射中的开关可强制为 Chat / Responses 请求设置 `service_tier: "priority"`，需要上游支持且可能产生额外费用
-- **自定义指令** — 按 Cursor 双方言（function / custom_grammar）分别配置，只改写 system 提示词
-  - 目标：整段 system，或预设 XML 块（如 `tone_and_style`、`epistemic_rigor`）
-  - 模式：前置 / 后置 / 覆盖（覆盖块时只替换块内文，保留标签）
-  - 管理面板显示最近一次请求的注入状态；覆盖整段 system 时会进行风险确认
-- **Body / Header 修改** — 对上游请求做字段级增删改（值为 `null` 删除）
+- **指令模板** — 从模板管理中选择按 Cursor 双方言配置的 system 提示词注入规则
+- **Body / Header 模板** — 从模板管理中选择对上游请求做字段级增删改的规则（值为 `null` 删除）
+
+模板在管理面板的“模板管理”区域单独维护，模型映射只保存四个模板名称。
 
 **示例**：在 Cursor 中添加 `claude-sonnet-4-5-20250929`，映射到上游 `gpt-5.4`，中转站接收格式选 `responses`。请求会转换到 `/v1/responses`，响应再统一回编为 Cursor Chat。
 

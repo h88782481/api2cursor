@@ -7,8 +7,6 @@
 <link rel="stylesheet" href="/static/admin.css">
 </head>
 <body>
-
-<!-- 登录 -->
 <div id="login">
   <div class="login-card">
     <h1>API 2 Cursor</h1>
@@ -24,7 +22,6 @@
   </div>
 </div>
 
-<!-- 仪表盘 -->
 <div id="dashboard">
   <header>
     <div class="container inner">
@@ -37,11 +34,8 @@
   </header>
 
   <main class="container">
-    <!-- 全局设置 -->
     <div class="card">
-      <div class="card-header">
-        <h2>全局设置</h2>
-      </div>
+      <div class="card-header"><h2>全局设置</h2></div>
       <div class="field">
         <label>中转站地址 (Proxy Target URL)</label>
         <div class="input-wrap"><input type="text" id="targetUrl" placeholder="https://your-relay.com"></div>
@@ -69,30 +63,66 @@
       <button class="btn btn-primary" onclick="saveSettings()">保存设置</button>
     </div>
 
-    <!-- 模型映射 -->
     <div class="card">
       <div class="card-header">
         <h2>模型映射</h2>
         <button class="btn btn-green btn-sm" onclick="openAddModal()">+ 添加映射</button>
       </div>
-      <div class="hint" style="margin-top:-12px;margin-bottom:16px">
-        Cursor 固定通过 <code>/v1/chat/completions</code> 发送请求。代理识别当前两种 Chat 工具方言，再按模型映射转换到指定上游协议。
-      </div>
+      <div class="hint" style="margin-top:-12px;margin-bottom:16px">Cursor 固定通过 <code>/v1/chat/completions</code> 发送请求。模型映射只选择上游模型和模板。</div>
       <div id="mappingList"></div>
     </div>
 
-    <!-- 用量统计 -->
     <div class="card">
-      <div class="card-header">
-        <h2>用量统计</h2>
-        <button class="btn btn-ghost btn-sm" onclick="loadStats()">刷新</button>
+      <div class="card-header"><h2>模板管理</h2></div>
+      <div class="template-tabs">
+        <button class="btn btn-ghost btn-sm active" data-template-kind="address" onclick="selectTemplateKind('address')">地址</button>
+        <button class="btn btn-ghost btn-sm" data-template-kind="instruction" onclick="selectTemplateKind('instruction')">指令</button>
+        <button class="btn btn-ghost btn-sm" data-template-kind="body" onclick="selectTemplateKind('body')">Body</button>
+        <button class="btn btn-ghost btn-sm" data-template-kind="header" onclick="selectTemplateKind('header')">Header</button>
       </div>
+      <div class="template-editor">
+        <div class="template-list" id="templateList"></div>
+        <div class="template-form">
+          <div class="field">
+            <label>模板名称</label>
+            <div class="input-wrap"><input id="templateName" placeholder="例如：openai-default"></div>
+          </div>
+          <div id="addressTemplateFields">
+            <div class="field"><label>地址</label><div class="input-wrap"><input id="templateUrl" placeholder="https://api.example.com"></div></div>
+            <div class="field"><label>API Key</label><div class="input-wrap"><input id="templateKey" type="password" placeholder="sk-xxx"></div></div>
+          </div>
+          <div id="instructionTemplateFields">
+            <div class="ins-dialect">
+              <div class="ins-dialect-title">Function 方言</div>
+              <div class="field"><label>注入文本</label><div class="input-wrap"><textarea id="templateFnText" rows="4"></textarea></div></div>
+              <div class="field"><label>目标</label><div class="input-wrap"><select id="templateFnTarget"></select></div></div>
+              <div class="field"><label>模式</label><div class="input-wrap"><select id="templateFnMode"><option value="prepend">前置</option><option value="append">后置</option><option value="replace">覆盖</option></select></div></div>
+            </div>
+            <div class="ins-dialect">
+              <div class="ins-dialect-title">Custom grammar 方言</div>
+              <div class="field"><label>注入文本</label><div class="input-wrap"><textarea id="templateCgText" rows="4"></textarea></div></div>
+              <div class="field"><label>目标</label><div class="input-wrap"><select id="templateCgTarget"></select></div></div>
+              <div class="field"><label>模式</label><div class="input-wrap"><select id="templateCgMode"><option value="prepend">前置</option><option value="append">后置</option><option value="replace">覆盖</option></select></div></div>
+            </div>
+          </div>
+          <div id="jsonTemplateFields">
+            <div class="field"><label>JSON 内容</label><div class="input-wrap"><textarea id="templateJson" rows="9" placeholder='{"stream_options": null}'></textarea></div></div>
+          </div>
+          <div class="template-actions">
+            <button class="btn btn-primary btn-sm" onclick="saveTemplate()">保存模板</button>
+            <button class="btn btn-red btn-sm" onclick="deleteTemplate()">删除模板</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header"><h2>用量统计</h2><button class="btn btn-ghost btn-sm" onclick="loadStats()">刷新</button></div>
       <div id="statsContent"><div class="empty">加载中…</div></div>
     </div>
   </main>
 </div>
 
-<!-- 弹窗 -->
 <div class="modal-overlay" id="modal">
   <div class="modal">
     <h3 id="modalTitle">添加模型映射</h3>
@@ -117,25 +147,11 @@
           <option value="gemini">Gemini (generateContent)</option>
         </select>
       </div>
-      <div class="hint">
-        <b>chat</b>：适用于 GPT、DeepSeek 或通过 <code>/v1/chat/completions</code> 提供所有模型的中转站<br>
-        <b>messages</b>：适用于中转站通过 <code>/v1/messages</code> 提供 Claude 模型<br>
-        <b>responses</b>：适用于中转站仅通过 <code>/v1/responses</code> 提供模型能力<br>
-        <b>gemini</b>：适用于 Google Gemini API 或兼容的中转站<br>
-        <b>自动检测</b>：按上游模型名判断（含 claude → messages，含 gemini → gemini，其他 → chat）
-      </div>
     </div>
-    <div class="field">
-      <label>自定义地址 <span style="color:var(--muted)">（可选，留空使用全局设置）</span></label>
-      <div class="input-wrap"><input type="text" id="mUrl" placeholder="留空则使用全局中转站地址"></div>
-    </div>
-    <div class="field">
-      <label>自定义 API Key <span style="color:var(--muted)">（可选，留空使用全局设置）</span></label>
-      <div class="input-wrap">
-        <input type="password" id="mKey" placeholder="留空则使用全局 API Key">
-        <button class="eye" onclick="togglePwd('mKey')">&#128065;</button>
-      </div>
-    </div>
+    <div class="field"><label>地址模板</label><div class="input-wrap"><select id="mAddressTemplate"></select></div></div>
+    <div class="field"><label>指令模板</label><div class="input-wrap"><select id="mInstructionTemplate"></select></div></div>
+    <div class="field"><label>Body 模板</label><div class="input-wrap"><select id="mBodyTemplate"></select></div></div>
+    <div class="field"><label>Header 模板</label><div class="input-wrap"><select id="mHeaderTemplate"></select></div></div>
     <div class="field">
       <label>思考等级</label>
       <div class="input-wrap">
@@ -149,106 +165,18 @@
           <option value="max">Max（最高）</option>
         </select>
       </div>
-      <div class="hint">
-        自动转换为 Chat 的 <code>reasoning_effort</code>、Responses 的 <code>reasoning.effort</code>、
-        Messages 的 <code>output_config.effort</code> 或 Gemini 的 <code>thinkingConfig.thinkingLevel</code>。
-        具体可用等级由上游模型决定；不支持所选等级时，上游会拒绝请求。
-      </div>
     </div>
     <div class="field">
-      <label class="switch-row">
-        <input type="checkbox" id="mFastMode">
-        <span>强制开启 Fast 模式</span>
-      </label>
-      <div class="hint">
-        Cursor 自己开启 Fast 时会自动透传。此开关会忽略 Cursor 当前选择，始终为 Chat / Responses 上游发送
-        <code>service_tier: "priority"</code>。可能产生额外费用，且需要上游支持。
-      </div>
-    </div>
-    <div class="field">
-      <label>自定义指令 <span style="color:var(--muted)">（可选，按 Cursor 方言分别配置）</span></label>
-      <div class="hint" style="margin-bottom:12px">
-        只改写 system 提示词。目标可选整段 system，或某个预设 XML 块；覆盖模式仅替换块内文，保留标签。
-      </div>
-      <div class="warning-box" id="mInstructionWarning"></div>
-
-      <div class="ins-dialect">
-        <div class="ins-dialect-head">
-          <div class="ins-dialect-title">Function 方言</div>
-          <button type="button" class="btn btn-ghost btn-xs" onclick="copyDialectRule('custom_grammar','function')">从 Custom grammar 复制</button>
-        </div>
-        <div class="field">
-          <label>注入文案</label>
-          <div class="input-wrap"><textarea id="mFnText" rows="4" placeholder="留空则不对 Function 方言注入" style="resize:vertical;min-height:72px"></textarea></div>
-        </div>
-        <div class="field">
-          <label>注入目标</label>
-          <div class="input-wrap"><select id="mFnTarget" onchange="updateBlockHint('function');updateInstructionWarning()"></select></div>
-          <div class="hint" id="mFnTargetHint"></div>
-        </div>
-        <div class="field">
-          <label>注入模式</label>
-          <div class="input-wrap">
-            <select id="mFnMode" onchange="updateInstructionWarning()">
-              <option value="prepend">前置</option>
-              <option value="append">后置</option>
-              <option value="replace">覆盖</option>
-            </select>
-          </div>
-        </div>
-      </div>
-
-      <div class="ins-dialect" style="margin-top:16px">
-        <div class="ins-dialect-head">
-          <div class="ins-dialect-title">Custom grammar 方言</div>
-          <button type="button" class="btn btn-ghost btn-xs" onclick="copyDialectRule('function','custom_grammar')">从 Function 复制</button>
-        </div>
-        <div class="field">
-          <label>注入文案</label>
-          <div class="input-wrap"><textarea id="mCgText" rows="4" placeholder="留空则不对 Custom grammar 方言注入" style="resize:vertical;min-height:72px"></textarea></div>
-        </div>
-        <div class="field">
-          <label>注入目标</label>
-          <div class="input-wrap"><select id="mCgTarget" onchange="updateBlockHint('custom_grammar');updateInstructionWarning()"></select></div>
-          <div class="hint" id="mCgTargetHint"></div>
-        </div>
-        <div class="field">
-          <label>注入模式</label>
-          <div class="input-wrap">
-            <select id="mCgMode" onchange="updateInstructionWarning()">
-              <option value="prepend">前置</option>
-              <option value="append">后置</option>
-              <option value="replace">覆盖</option>
-            </select>
-          </div>
-        </div>
-      </div>
-    </div>
-    <div class="field">
-      <label>Body 修改 <span style="color:var(--muted)">（可选，JSON 格式）</span></label>
-      <div class="input-wrap"><textarea id="mBodyMods" rows="3" placeholder='例: {"stream_options": null}' style="resize:vertical;min-height:60px;font-family:Consolas,Monaco,monospace;font-size:13px"></textarea></div>
-      <div class="hint">
-        对转发到上游的请求体做字段级增删改。值为 <code>null</code> 表示删除该字段，其余为设置/覆盖。<br>
-        适用场景：删除上游不支持的 <code>stream_options</code>，或设置未提供专用控件的字段。
-      </div>
-    </div>
-    <div class="field">
-      <label>Header 修改 <span style="color:var(--muted)">（可选，JSON 格式）</span></label>
-      <div class="input-wrap"><textarea id="mHeaderMods" rows="3" placeholder='例: {"X-Custom-Header": "value", "X-Unwanted": null}' style="resize:vertical;min-height:60px;font-family:Consolas,Monaco,monospace;font-size:13px"></textarea></div>
-      <div class="hint">
-        对转发到上游的请求头做增删改，规则同 Body 修改。<br>
-        适用场景：按模型设置不同的 <code>Authorization</code>、API 版本头等。
-      </div>
+      <label class="switch-row"><input type="checkbox" id="mFastMode"><span>强制开启 Fast 模式</span></label>
     </div>
     <div class="modal-footer">
       <button class="btn btn-ghost" onclick="closeModal()">取消</button>
-      <button class="btn btn-primary" id="modalSaveBtn" onclick="saveMapping()">保存</button>
+      <button class="btn btn-primary" onclick="saveMapping()">保存</button>
     </div>
   </div>
 </div>
 
 <div class="toast-area" id="toasts"></div>
-
 <script src="/static/admin.js"></script>
 </body>
 </html>

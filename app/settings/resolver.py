@@ -7,7 +7,7 @@ from typing import Any
 
 from ..protocol import ConfiguredProtocol, WireProtocol
 from .repository import SettingsRepository
-from .schema import InstructionSettings, ThinkingLevel, env
+from .schema import InstructionSettings, TemplateSelection, ThinkingLevel, env
 
 
 @dataclass(frozen=True, slots=True)
@@ -33,6 +33,12 @@ class RouteResolver:
         global_upstream = settings.global_.upstream
         mapping = settings.models.get(client_model)
         upstream = mapping.upstream if mapping else None
+        selection = mapping.templates if mapping else TemplateSelection()
+        templates = settings.templates
+        address = templates.address.get(selection.address)
+        instructions = templates.instruction.get(selection.instruction)
+        body = templates.body.get(selection.body, {})
+        headers = templates.header.get(selection.header, {})
 
         model = (upstream.model if upstream else '') or global_upstream.model or client_model
         protocol: ConfiguredProtocol = upstream.protocol if upstream else 'auto'
@@ -48,21 +54,13 @@ class RouteResolver:
             client_model=client_model,
             upstream_model=model,
             protocol=protocol,
-            base_url=(upstream.base_url if upstream else '')
-            or global_upstream.base_url
-            or env.proxy_target_url,
-            api_key=(upstream.api_key if upstream else '')
-            or global_upstream.api_key
-            or env.proxy_api_key,
-            instructions=(
-                mapping.instructions
-                if mapping
-                else InstructionSettings()
-            ),
+            base_url=(address.base_url if address else '') or global_upstream.base_url or env.proxy_target_url,
+            api_key=(address.api_key if address else '') or global_upstream.api_key or env.proxy_api_key,
+            instructions=instructions or InstructionSettings(),
             thinking_level=mapping.request.thinking_level if mapping else 'default',
             fast_mode=mapping.request.fast_mode if mapping else False,
-            body_overrides=dict(mapping.request.body) if mapping else {},
-            header_overrides=dict(mapping.request.headers) if mapping else {},
+            body_overrides=dict(body),
+            header_overrides=dict(headers),
         )
 
     def model_ids(self) -> list[str]:

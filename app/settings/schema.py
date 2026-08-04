@@ -39,6 +39,13 @@ class UpstreamSettings(BaseModel):
     api_key: str = ''
 
 
+class ModelUpstreamSettings(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+
+    model: str = ''
+    protocol: ConfiguredProtocol = 'auto'
+
+
 class DialectInstruction(BaseModel):
     model_config = ConfigDict(extra='forbid')
 
@@ -67,15 +74,38 @@ class RequestSettings(BaseModel):
 
     thinking_level: ThinkingLevel = 'default'
     fast_mode: bool = False
-    body: dict[str, Any] = Field(default_factory=dict)
-    headers: dict[str, Any] = Field(default_factory=dict)
+
+
+class AddressTemplate(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+
+    base_url: str = ''
+    api_key: str = ''
+
+
+class TemplateSelection(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+
+    address: str = ''
+    instruction: str = ''
+    body: str = ''
+    header: str = ''
+
+
+class TemplateSettings(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+
+    address: dict[str, AddressTemplate] = Field(default_factory=dict)
+    instruction: dict[str, InstructionSettings] = Field(default_factory=dict)
+    body: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    header: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
 
 class ModelMapping(BaseModel):
     model_config = ConfigDict(extra='forbid')
 
-    upstream: UpstreamSettings = Field(default_factory=UpstreamSettings)
-    instructions: InstructionSettings = Field(default_factory=InstructionSettings)
+    upstream: ModelUpstreamSettings = Field(default_factory=ModelUpstreamSettings)
+    templates: TemplateSelection = Field(default_factory=TemplateSelection)
     request: RequestSettings = Field(default_factory=RequestSettings)
 
 
@@ -94,6 +124,7 @@ class Settings(BaseModel):
         alias='global',
         serialization_alias='global',
     )
+    templates: TemplateSettings = Field(default_factory=TemplateSettings)
     models: dict[str, ModelMapping] = Field(default_factory=dict)
 
 

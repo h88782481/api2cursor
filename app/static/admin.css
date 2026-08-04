@@ -49,6 +49,14 @@ main{padding:28px 0 60px}
 .switch-row{display:flex!important;align-items:center;gap:9px;color:var(--text)!important;cursor:pointer}
 .switch-row input{width:16px;height:16px;accent-color:var(--primary)}
 .ins-dialect{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:14px 14px 2px}
+.template-tabs{display:flex;gap:8px;margin-bottom:16px}
+.template-tabs .active{color:var(--text);border-color:var(--primary)}
+.template-editor{display:grid;grid-template-columns:190px 1fr;gap:16px}
+.template-list{display:flex;flex-direction:column;gap:6px}
+.template-item{background:var(--surface);border:1px solid var(--border);border-radius:6px;color:var(--text);padding:9px 10px;text-align:left;cursor:pointer}
+.template-item:hover{border-color:var(--primary)}
+.template-form{min-width:0}
+.template-actions{display:flex;gap:8px;justify-content:flex-end}
 .ins-dialect-title{font-size:13px;font-weight:600;color:var(--text);margin-bottom:10px}
 .ins-dialect-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:10px}
 .ins-dialect-head .ins-dialect-title{margin-bottom:0}
@@ -96,3 +104,4 @@ main{padding:28px 0 60px}
 .toast-ok{background:#065f46;color:#a7f3d0}
 .toast-err{background:#7f1d1d;color:#fca5a5}
 @keyframes slideIn{from{transform:translateX(100px);opacity:0}to{transform:none;opacity:1}}
+@media(max-width:700px){.template-editor{grid-template-columns:1fr}.template-list{max-height:180px;overflow:auto}}

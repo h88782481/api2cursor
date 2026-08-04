@@ -6,15 +6,14 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from ..chat.instructions import valid_targets
 from ..protocol import ConfiguredProtocol
 from ..settings.schema import (
     DebugMode,
-    InstructionSettings,
     ModelMapping,
+    ModelUpstreamSettings,
     RequestSettings,
+    TemplateSelection,
     ThinkingLevel,
-    UpstreamSettings,
 )
 
 
@@ -32,38 +31,20 @@ class AdminMapping(BaseModel):
     name: str = ''
     upstream_model: str = ''
     upstream_protocol: ConfiguredProtocol = 'auto'
-    target_url: str = ''
-    api_key: str = ''
+    templates: TemplateSelection = Field(default_factory=TemplateSelection)
     thinking_level: ThinkingLevel = 'default'
     fast_mode: bool = False
-    instructions: InstructionSettings = Field(default_factory=InstructionSettings)
-    body_modifications: dict[str, Any] = Field(default_factory=dict)
-    header_modifications: dict[str, Any] = Field(default_factory=dict)
-
-    def validate_targets(self) -> None:
-        for dialect in ('function', 'custom_grammar'):
-            rule = self.instructions.for_dialect(dialect)
-            if rule.text and rule.target not in valid_targets(dialect):
-                raise ValueError(f'instructions.{dialect}.target 无效: {rule.target}')
-            if rule.text and rule.target != 'all' and f'</{rule.target}>' in rule.text:
-                raise ValueError(
-                    f'instructions.{dialect}.text 不能包含 </{rule.target}>',
-                )
 
     def to_mapping(self, default_name: str) -> ModelMapping:
         return ModelMapping(
-            upstream=UpstreamSettings(
+            upstream=ModelUpstreamSettings(
                 model=self.upstream_model or default_name,
                 protocol=self.upstream_protocol,
-                base_url=self.target_url,
-                api_key=self.api_key,
             ),
-            instructions=self.instructions,
+            templates=self.templates,
             request=RequestSettings(
                 thinking_level=self.thinking_level,
                 fast_mode=self.fast_mode,
-                body=self.body_modifications,
-                headers=self.header_modifications,
             ),
         )
 
@@ -72,11 +53,7 @@ class AdminMapping(BaseModel):
         return cls.model_construct(
             upstream_model=mapping.upstream.model,
             upstream_protocol=mapping.upstream.protocol,
-            target_url=mapping.upstream.base_url,
-            api_key=mapping.upstream.api_key,
+            templates=mapping.templates,
             thinking_level=mapping.request.thinking_level,
             fast_mode=mapping.request.fast_mode,
-            instructions=mapping.instructions,
-            body_modifications=mapping.request.body,
-            header_modifications=mapping.request.headers,
         )
