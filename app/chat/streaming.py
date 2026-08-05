@@ -13,6 +13,7 @@ from ..errors import ApiError
 from ..protocol import WireProtocol
 from ..upstream import iter_sse
 from .cursor import CursorAdapter
+from .reasoning_display import CursorReasoningDisplay
 from .rosetta import Rosetta
 
 
@@ -45,6 +46,7 @@ class StreamBridge:
         custom_tools = custom_tools or set()
         custom_calls: set[str] = set()
         custom_arguments: dict[str, str] = {}
+        reasoning_display = CursorReasoningDisplay()
 
         try:
             async for event_type, raw in iter_sse(response):
@@ -97,6 +99,7 @@ class StreamBridge:
                                 target,
                                 client_model,
                                 on_client,
+                                reasoning_display,
                             ):
                                 yield message
                     if event.get('type') == 'usage':
@@ -108,6 +111,7 @@ class StreamBridge:
                         target,
                         client_model,
                         on_client,
+                        reasoning_display,
                     ):
                         yield message
         except (httpx.HTTPError, ApiError) as exc:
@@ -123,6 +127,12 @@ class StreamBridge:
         finally:
             await response.aclose()
 
+        if closing := reasoning_display.flush_chunk(client_model):
+            message = sse_data(closing)
+            if on_client:
+                on_client(message)
+            yield message
+
         done = sse_data('[DONE]')
         if on_client:
             on_client(done)
@@ -134,12 +144,15 @@ class StreamBridge:
         target: Any,
         client_model: str,
         on_client: Callable[[str], None] | None,
+        reasoning_display: CursorReasoningDisplay,
     ) -> Iterator[str]:
         for output in self.rosetta.stream_to_chat(event, target):
-            message = sse_data(self.cursor.stream_chunk(output, client_model))
-            if on_client:
-                on_client(message)
-            yield message
+            chunk = self.cursor.stream_chunk(output, client_model)
+            for visible_chunk in reasoning_display.rewrite_chunk(chunk):
+                message = sse_data(visible_chunk)
+                if on_client:
+                    on_client(message)
+                yield message
 
 
 def _merge_usage(total: dict[str, Any], incoming: dict[str, Any]) -> None:

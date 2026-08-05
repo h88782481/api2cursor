@@ -10,6 +10,7 @@ from llm_rosetta.types.ir import IRRequest, IRResponse
 
 from ..errors import ApiError
 from .exchange import CursorDialect
+from .reasoning_display import mirror_reasoning_response, restore_reasoning_mirrors
 from .rosetta import Rosetta
 
 
@@ -19,6 +20,7 @@ class CursorAdapter:
 
     def parse(self, payload: dict[str, Any]) -> tuple[CursorDialect, IRRequest, set[str]]:
         self._validate(payload)
+        payload = restore_reasoning_mirrors(payload)
         custom_tools = {
             tool['name']
             for tool in payload.get('tools', [])
@@ -60,6 +62,7 @@ class CursorAdapter:
                 choice['finish_reason'] = {'reason': 'tool_calls'}
         result = self.rosetta.response_to_chat(response)
         self._unwrap_custom_response(result, custom_tools)
+        mirror_reasoning_response(result)
         return result
 
     @staticmethod
