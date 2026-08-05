@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from ..errors import ApiError
 from ..settings import Route, RouteResolver
 from ..upstream import spec
 from .cursor import CursorAdapter
@@ -44,8 +45,11 @@ class UpstreamRequestBuilder:
         self.instruction_status = instruction_status
 
     def build(self, payload: dict[str, Any]) -> PreparedRequest:
-        dialect, request, custom_tools = self.cursor.parse(payload)
-        route = self.resolver.resolve(payload['model'])
+        client_model = payload.get('model')
+        if not isinstance(client_model, str) or not client_model.strip():
+            raise ApiError('model 必须是非空字符串')
+        route = self.resolver.resolve(client_model)
+        dialect, request, custom_tools = self.cursor.parse(payload, route.protocol)
         apply_text_replacements(request, route.replacements)
         injection = apply_system_injection(
             request,
@@ -63,6 +67,7 @@ class UpstreamRequestBuilder:
         body, warnings = self.rosetta.request_to(route.protocol, request)
         warnings = [*injection.warnings, *warnings]
         _apply_reasoning_wire(body, route)
+        _request_encrypted_reasoning(body, route)
         _apply_service_tier(body, route, payload.get('service_tier'), warnings)
         wire = spec(route.protocol)
         wire.prepare_body(body)
@@ -94,6 +99,14 @@ def _apply_reasoning_wire(body: dict[str, Any], route: Route) -> None:
         body.setdefault('output_config', {})['effort'] = route.thinking_level
     else:
         body['thinkingConfig'] = {'thinkingLevel': route.thinking_level}
+
+
+def _request_encrypted_reasoning(body: dict[str, Any], route: Route) -> None:
+    if route.protocol != 'responses':
+        return
+    include = body.setdefault('include', [])
+    if isinstance(include, list) and 'reasoning.encrypted_content' not in include:
+        include.append('reasoning.encrypted_content')
 
 
 def apply_text_replacements(request: dict[str, Any], template: Any) -> None:

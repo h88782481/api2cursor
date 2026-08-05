@@ -117,6 +117,7 @@ class ChatGateway:
                 ir_response,
                 exchange.route.client_model,
                 exchange.custom_tools,
+                exchange.route.protocol,
             )
         except (ValueError, ApiError) as exc:
             error = exc if isinstance(exc, ApiError) else ApiError(

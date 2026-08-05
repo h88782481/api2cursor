@@ -60,9 +60,17 @@ class StreamBridge:
                     continue
                 if not isinstance(chunk, dict):
                     continue
+                reasoning_display.capture_upstream(protocol, chunk)
 
                 for event in self.rosetta.stream_from(protocol, chunk, source):
                     event_type = event.get('type')
+                    if (
+                        event_type == 'reasoning_delta'
+                        and event.get('signature') is not None
+                        and not event.get('reasoning')
+                    ):
+                        # Chat SSE 无法表达 provider 签名，原值已进入状态载体。
+                        continue
                     if event_type == 'stream_start':
                         event['response_id'] = event.get('response_id') or fallback_id
                         event['model'] = event.get('model') or client_model
