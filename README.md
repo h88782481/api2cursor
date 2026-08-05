@@ -86,6 +86,7 @@ python main.py
 - **中转站接收格式** — `auto`（按上游模型名判断）/ `chat` / `messages` / `responses` / `gemini`
 - **地址模板** — 从模板管理中选择地址和 API Key，实现分流到不同中转站
 - **思考等级** — 可选 `minimal` / `low` / `medium` / `high` / `xhigh` / `max`，按上游协议转换为对应的 reasoning/thinking 字段；具体可用等级取决于模型，不支持时上游会拒绝请求
+- **思考转换** — 默认关闭；开启后才会把上游思考内容镜像为 Cursor 可见的折叠块，并通过隐藏状态载体在后续轮次恢复 provider 原生思考状态
 - **Fast 模式** — 默认透传 Cursor 发送的 `service_tier`；映射中的开关可强制为 Chat / Responses 请求设置 `service_tier: "priority"`，需要上游支持且可能产生额外费用
 - **指令模板** — 从模板管理中选择按 Cursor 双方言配置的 system 提示词注入规则
 - **Body / Header 模板** — 从模板管理中选择对上游请求做字段级增删改的规则（值为 `null` 删除）

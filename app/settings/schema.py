@@ -82,6 +82,7 @@ class RequestSettings(BaseModel):
     model_config = ConfigDict(extra='forbid')
 
     thinking_level: ThinkingLevel = 'default'
+    reasoning_conversion: bool = False
     fast_mode: bool = False
 
 

@@ -34,6 +34,7 @@ class StreamBridge:
         client_model: str,
         *,
         custom_tools: set[str] | None = None,
+        reasoning_conversion: bool = False,
         on_upstream: Callable[[dict[str, Any]], None] | None = None,
         on_client: Callable[[str], None] | None = None,
         on_usage: Callable[[dict[str, Any]], None] | None = None,
@@ -42,11 +43,13 @@ class StreamBridge:
         target = self.rosetta.stream_context('chat')
         tool_indexes: dict[str, int] = {}
         usage: dict[str, Any] = {}
+        pending_stream_end: dict[str, Any] | None = None
+        stream_failed = False
         fallback_id = f'chatcmpl-{uuid4().hex}'
         custom_tools = custom_tools or set()
         custom_calls: set[str] = set()
         custom_arguments: dict[str, str] = {}
-        reasoning_display = CursorReasoningDisplay()
+        reasoning_display = CursorReasoningDisplay() if reasoning_conversion else None
 
         try:
             async for event_type, raw in iter_sse(response):
@@ -60,7 +63,8 @@ class StreamBridge:
                     continue
                 if not isinstance(chunk, dict):
                     continue
-                reasoning_display.capture_upstream(protocol, chunk)
+                if reasoning_display is not None:
+                    reasoning_display.capture_upstream(protocol, chunk)
 
                 for event in self.rosetta.stream_from(protocol, chunk, source):
                     event_type = event.get('type')
@@ -69,7 +73,7 @@ class StreamBridge:
                         and event.get('signature') is not None
                         and not event.get('reasoning')
                     ):
-                        # Chat SSE 无法表达 provider 签名，原值已进入状态载体。
+                        # Chat SSE 无法表达 provider 签名；启用转换时原值由状态载体保存。
                         continue
                     if event_type == 'stream_start':
                         event['response_id'] = event.get('response_id') or fallback_id
@@ -110,10 +114,21 @@ class StreamBridge:
                                 reasoning_display,
                             ):
                                 yield message
-                    if event.get('type') == 'usage':
-                        _merge_usage(usage, event['usage'])
-                        if on_usage:
-                            on_usage(usage)
+                    if event_type == 'usage':
+                        incoming_usage = event.get('usage')
+                        if isinstance(incoming_usage, dict):
+                            _merge_usage(usage, incoming_usage)
+                            if on_usage:
+                                on_usage(dict(usage))
+                        # 部分 Chat 上游会在每个 delta 中返回累计 usage。
+                        # 这些快照若逐个交给目标转换器，会被当作增量相加。
+                        continue
+                    if event_type == 'stream_end':
+                        # Defer termination until all cumulative usage snapshots
+                        # have been collected, including snapshots sent after
+                        # the provider's own end marker.
+                        pending_stream_end = pending_stream_end or event
+                        continue
                     for message in self._encode(
                         event,
                         target,
@@ -123,6 +138,7 @@ class StreamBridge:
                     ):
                         yield message
         except (httpx.HTTPError, ApiError) as exc:
+            stream_failed = True
             error = exc if isinstance(exc, ApiError) else ApiError(
                 f'读取上游流失败: {exc}',
                 error_type='proxy_error',
@@ -135,11 +151,36 @@ class StreamBridge:
         finally:
             await response.aclose()
 
-        if closing := reasoning_display.flush_chunk(client_model):
-            message = sse_data(closing)
-            if on_client:
-                on_client(message)
-            yield message
+        if not stream_failed:
+            if usage:
+                normalized_usage = {
+                    'type': 'usage',
+                    'usage': dict(usage),
+                }
+                for message in self._encode(
+                    normalized_usage,
+                    target,
+                    client_model,
+                    on_client,
+                    reasoning_display,
+                ):
+                    yield message
+            final_stream_end = pending_stream_end or {'type': 'stream_end'}
+            for message in self._encode(
+                final_stream_end,
+                target,
+                client_model,
+                on_client,
+                reasoning_display,
+            ):
+                yield message
+
+        if reasoning_display is not None:
+            if closing := reasoning_display.flush_chunk(client_model):
+                message = sse_data(closing)
+                if on_client:
+                    on_client(message)
+                yield message
 
         done = sse_data('[DONE]')
         if on_client:
@@ -152,11 +193,16 @@ class StreamBridge:
         target: Any,
         client_model: str,
         on_client: Callable[[str], None] | None,
-        reasoning_display: CursorReasoningDisplay,
+        reasoning_display: CursorReasoningDisplay | None,
     ) -> Iterator[str]:
         for output in self.rosetta.stream_to_chat(event, target):
             chunk = self.cursor.stream_chunk(output, client_model)
-            for visible_chunk in reasoning_display.rewrite_chunk(chunk):
+            visible_chunks = (
+                reasoning_display.rewrite_chunk(chunk)
+                if reasoning_display is not None
+                else [chunk]
+            )
+            for visible_chunk in visible_chunks:
                 message = sse_data(visible_chunk)
                 if on_client:
                     on_client(message)

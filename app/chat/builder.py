@@ -49,7 +49,11 @@ class UpstreamRequestBuilder:
         if not isinstance(client_model, str) or not client_model.strip():
             raise ApiError('model 必须是非空字符串')
         route = self.resolver.resolve(client_model)
-        dialect, request, custom_tools = self.cursor.parse(payload, route.protocol)
+        dialect, request, custom_tools = self.cursor.parse(
+            payload,
+            route.protocol,
+            reasoning_conversion=route.reasoning_conversion,
+        )
         apply_text_replacements(request, route.replacements)
         injection = apply_system_injection(
             request,
@@ -102,7 +106,7 @@ def _apply_reasoning_wire(body: dict[str, Any], route: Route) -> None:
 
 
 def _request_encrypted_reasoning(body: dict[str, Any], route: Route) -> None:
-    if route.protocol != 'responses':
+    if route.protocol != 'responses' or not route.reasoning_conversion:
         return
     include = body.setdefault('include', [])
     if isinstance(include, list) and 'reasoning.encrypted_content' not in include:

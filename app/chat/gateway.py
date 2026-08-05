@@ -118,6 +118,7 @@ class ChatGateway:
                 exchange.route.client_model,
                 exchange.custom_tools,
                 exchange.route.protocol,
+                reasoning_conversion=exchange.route.reasoning_conversion,
             )
         except (ValueError, ApiError) as exc:
             error = exc if isinstance(exc, ApiError) else ApiError(
@@ -161,6 +162,7 @@ class ChatGateway:
                     exchange.route.protocol,
                     exchange.route.client_model,
                     custom_tools=exchange.custom_tools,
+                    reasoning_conversion=exchange.route.reasoning_conversion,
                     on_upstream=lambda event: self.request_log.upstream_event(exchange.log, event),
                     on_client=lambda event: self.request_log.client_event(exchange.log, event),
                     on_usage=lambda value: usage.update(value),

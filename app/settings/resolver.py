@@ -26,6 +26,7 @@ class Route:
     instructions: InstructionSettings = field(default_factory=InstructionSettings)
     replacements: tuple[TextReplacementTemplate, ...] = ()
     thinking_level: ThinkingLevel = 'default'
+    reasoning_conversion: bool = False
     fast_mode: bool = False
     body_overrides: dict[str, Any] = field(default_factory=dict)
     header_overrides: dict[str, Any] = field(default_factory=dict)
@@ -71,6 +72,7 @@ class RouteResolver:
             instructions=instructions or InstructionSettings(),
             replacements=replacements,
             thinking_level=mapping.request.thinking_level if mapping else 'default',
+            reasoning_conversion=mapping.request.reasoning_conversion if mapping else False,
             fast_mode=mapping.request.fast_mode if mapping else False,
             body_overrides=dict(body),
             header_overrides=dict(headers),

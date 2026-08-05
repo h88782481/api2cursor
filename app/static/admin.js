@@ -337,6 +337,7 @@ async function loadMappings() {
       selected.header ? '<span class="tag tag-mods">Header模板</span>' : '',
       selected.replacements?.length ? `<span class="tag tag-replacement">文本替换 ${selected.replacements.length}</span>` : '',
       mapping.thinking_level !== 'default' ? `<span class="tag tag-thinking">思考: ${esc(mapping.thinking_level)}</span>` : '',
+      mapping.reasoning_conversion ? '<span class="tag tag-thinking">思考转换</span>' : '',
       mapping.fast_mode ? '<span class="tag tag-fast">Fast</span>' : '',
       instructionStatusTag(name, hasInstruction),
     ].join('');
@@ -357,6 +358,7 @@ function resetMappingForm() {
   document.getElementById('mUpstream').value = '';
   document.getElementById('mUpstreamProtocol').value = 'auto';
   document.getElementById('mThinkingLevel').value = 'default';
+  document.getElementById('mReasoningConversion').checked = false;
   document.getElementById('mFastMode').checked = false;
   ['mAddressTemplate', 'mInstructionTemplate', 'mBodyTemplate', 'mHeaderTemplate']
     .forEach(id => { document.getElementById(id).value = ''; });
@@ -384,6 +386,7 @@ async function openEditModal(name) {
     document.getElementById('mUpstream').value = mapping.upstream_model || '';
     document.getElementById('mUpstreamProtocol').value = mapping.upstream_protocol || 'auto';
     document.getElementById('mThinkingLevel').value = mapping.thinking_level || 'default';
+    document.getElementById('mReasoningConversion').checked = !!mapping.reasoning_conversion;
     document.getElementById('mFastMode').checked = !!mapping.fast_mode;
     for (const [kind, id] of [
       ['address', 'mAddressTemplate'], ['instruction', 'mInstructionTemplate'],
@@ -419,6 +422,7 @@ async function saveMapping() {
       replacements: [...selectedReplacementNames],
     },
     thinking_level: document.getElementById('mThinkingLevel').value,
+    reasoning_conversion: document.getElementById('mReasoningConversion').checked,
     fast_mode: document.getElementById('mFastMode').checked,
   };
   try {

@@ -33,6 +33,7 @@ class AdminMapping(BaseModel):
     upstream_protocol: ConfiguredProtocol = 'auto'
     templates: TemplateSelection = Field(default_factory=TemplateSelection)
     thinking_level: ThinkingLevel = 'default'
+    reasoning_conversion: bool = False
     fast_mode: bool = False
 
     def to_mapping(self, default_name: str) -> ModelMapping:
@@ -44,6 +45,7 @@ class AdminMapping(BaseModel):
             templates=self.templates,
             request=RequestSettings(
                 thinking_level=self.thinking_level,
+                reasoning_conversion=self.reasoning_conversion,
                 fast_mode=self.fast_mode,
             ),
         )
@@ -55,5 +57,6 @@ class AdminMapping(BaseModel):
             upstream_protocol=mapping.upstream.protocol,
             templates=mapping.templates,
             thinking_level=mapping.request.thinking_level,
+            reasoning_conversion=mapping.request.reasoning_conversion,
             fast_mode=mapping.request.fast_mode,
         )
